@@ -1,6 +1,11 @@
 # Created by https://www.gitignore.io/api/c,clion,linux
 # Edit at https://www.gitignore.io/?templates=c,clion,linux
 
+
+## Zelf toegevoegd, want nog steeds als untracked aangegeven ##
+idea/*
+
+
 ### C ###
 # Prerequisites
 *.d
