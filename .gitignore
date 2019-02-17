@@ -3,7 +3,8 @@
 
 
 ## Zelf toegevoegd, want nog steeds als untracked aangegeven ##
-idea/*
+.idea/
+CMakeLists.txt
 
 
 ### C ###
