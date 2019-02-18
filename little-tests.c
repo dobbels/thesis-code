@@ -1,4 +1,3 @@
-/*<Header Files>*/
 #include "contiki.h"
 #include "sys/etimer.h"
 #include "dev/leds.h"
@@ -22,7 +21,7 @@ PROCESS_THREAD(hidra_r, ev, data)
 	PROCESS_WAIT_EVENT_UNTIL((ev==sensors_event) && (data == &button_sensor));
 
 	etimer_set(&et, CLOCK_SECOND*SECONDS); 
-  while(1) {
+	while(1) {
 
 		PROCESS_WAIT_EVENT();
 		if(etimer_expired(&et)) {

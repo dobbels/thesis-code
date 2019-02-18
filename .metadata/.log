@@ -22,3 +22,16 @@ Command-line arguments:  -os linux -ws gtk -arch x86
 !MESSAGE Software being installed: Target Communication Framework (Incubation) 0.4.0.201106081058 (org.eclipse.tm.tcf.feature.feature.group 0.4.0.201106081058)
 !SUBENTRY 2 org.eclipse.equinox.p2.director 4 0 2019-02-17 23:21:30.555
 !MESSAGE Missing requirement: Target Communication Framework (Incubation) 0.4.0.201106081058 (org.eclipse.tm.tcf.feature.feature.group 0.4.0.201106081058) requires 'org.eclipse.rse.core 0.0.0' but it could not be found
+!SESSION 2019-02-17 23:32:16.405 -----------------------------------------------
+eclipse.buildId=debbuild
+java.version=1.7.0_79
+java.vendor=Oracle Corporation
+BootLoader constants: OS=linux, ARCH=x86, WS=gtk, NL=en_US
+Command-line arguments:  -os linux -ws gtk -arch x86
+
+!ENTRY org.eclipse.core.resources 4 77 2019-02-17 23:33:59.144
+!MESSAGE Invalid project description.
+!SUBENTRY 1 unknown 0 0 2019-02-17 23:33:59.144
+!MESSAGE OK
+!SUBENTRY 1 org.eclipse.core.resources 4 77 2019-02-17 23:33:59.144
+!MESSAGE /home/user/thesis-code overlaps the workspace location: /home/user/thesis-code

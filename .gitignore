@@ -6,7 +6,16 @@
 .idea/
 CMakeLists.txt
 
+.metadata/.log
+.metadata/.plugins/org.eclipse.cdt.core/.log
+.metadata/.plugins/org.eclipse.core.resources/.safetable/org.eclipse.core.resources
+.metadata/.plugins/org.eclipse.core.runtime/.settings/org.eclipse.ui.ide.prefs
+.metadata/.plugins/org.eclipse.ui.workbench/dialog_settings.xml
+.metadata/.plugins/org.eclipse.ui.workbench/workbench.xml
+
 .metadata/*
+.project
+.cproject
 
 ### C ###
 # Prerequisites
