@@ -33,7 +33,7 @@
 // TODO gebruik voor verschillenden services verschillenden SERVICE_ID en verschillenden poorten
 #define UDP_PORT 1234
 #define OWN_SERVICE_ID 190
-#define OTHER_SERVICE_ID 191
+#define OTHER_SERVICE_ID 190
 
 static struct simple_udp_connection unicast_connection;
 uip_ipaddr_t *ipaddr;
