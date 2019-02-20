@@ -3,6 +3,10 @@
 
 
 ## Zelf toegevoegd, want nog steeds als untracked aangegeven ##
+*.z1
+*.native
+symbols.*
+
 .idea/
 CMakeLists.txt
 
