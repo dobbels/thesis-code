@@ -1,6 +1,6 @@
 /**
- * Does not create the RPL DAG and therefore does not become the network root, hoping this will solve the problem of not receiving any packages.
- * Publishes another service than the hidra mote that is root
+ * Does not create the RPL DAG and therefore does not become the network root.
+ * Publishes service with number OWN_SERVICE_ID.
  */
 
 #include "contiki.h"
@@ -30,14 +30,16 @@
 #define DEBUG DEBUG_PRINT
 #include "net/ip/uip-debug.h"
 
-// TODO gebruik voor verschillenden services verschillenden SERVICE_ID en verschillenden poorten
 #define UDP_PORT 1234
-#define OWN_SERVICE_ID 190
-#define OTHER_SERVICE_ID 190
 
 static struct simple_udp_connection unicast_connection;
 uip_ipaddr_t *ipaddr;
 uip_ipaddr_t *send_addr;
+// Construct IPv4 address.
+//#define uip_ipaddr(send_addr, 127, 0, 0, 1);
+// Construct IPv6 address.
+// TODO Bytes in decimals?
+//#define uip_ip6addr(send_addr, 0xfd00, 0x0, 0x0, 0x0, 0xc30c, 0x0, 0x0, 0x1)
 
 
 PROCESS(hidra_r,"HidraR");
@@ -91,12 +93,6 @@ set_global_address(void)
 static void
 send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tijdens een protocol
 {
-//	This function returns the address of the node offering a specific service.
-//	If the service is not known, the function returns NULL.
-//	If there are more than one nodes offering the service, this function
-//	returns the address of the node that most recently announced its service.
-	send_addr = servreg_hack_lookup(OTHER_SERVICE_ID);
-
 	if(send_addr != NULL) {
 		static unsigned int message_number;
 		char buf[20];
@@ -108,7 +104,7 @@ send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tij
 		message_number++;
 		simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, send_addr);
 	} else {
-		printf("Service %d not found\n", OTHER_SERVICE_ID);
+		printf("No send_addr given");
 	}
 }
 
@@ -119,13 +115,12 @@ PROCESS_THREAD(hidra_r, ev, data)
 	
 	SENSORS_ACTIVATE(button_sensor);
 
-	servreg_hack_init();
+	ipaddr = set_global_address(); // TODO mag void zijn?
 
-	ipaddr = set_global_address();
+	// TODO: toch create_rpl_dag, maar zonder set_root, dat doet border_router dan?
 
-	servreg_hack_register(OWN_SERVICE_ID, ipaddr);
-
-	// NULL parameter as the destination address to allow packets from any address.
+	// Register a socket, with host and remote port UDP_PORT
+	// NULL parameter as the destination address to allow packets from any address. (fixed IPv6 address can be given)
 	// Meerdere van deze listeners zijn mogelijk
 	simple_udp_register(&unicast_connection, UDP_PORT,
 						  NULL, UDP_PORT,

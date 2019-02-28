@@ -3,6 +3,7 @@
 
 
 ## Zelf toegevoegd, want nog steeds als untracked aangegeven ##
+*.sky
 *.z1
 *.native
 symbols.*
