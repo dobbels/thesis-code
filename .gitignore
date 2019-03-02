@@ -7,6 +7,7 @@
 *.z1
 *.native
 symbols.*
+.settings/*
 
 .idea/
 CMakeLists.txt

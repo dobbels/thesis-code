@@ -20,9 +20,6 @@
 
 #include "sys/node-id.h"
 
-#include <stdio.h>
-#include <string.h>
-
 #include "dev/button-sensor.h"
 
 // To print the IPv6 addresses in a friendlier way
@@ -33,10 +30,19 @@
 #define UDP_PORT 1234
 
 static struct simple_udp_connection unicast_connection;
-uip_ipaddr_t *ipaddr;
-uip_ipaddr_t *send_addr;
+
+//Example of "setting ip address"
+//uip_ipaddr_t ipaddr;
+//struct uip_conn *c;
+//
+//uip_ipaddr(&ipaddr, 192,168,1,2);
+//c = uip_connect(&ipaddr, UIP_HTONS(80));
+
+uip_ipaddr_t send_addr;
+
+
 // Construct IPv4 address.
-//#define uip_ipaddr(send_addr, 127, 0, 0, 1);
+//#define uip_ipaddr(send_addr, 192, 0, 0, 1);
 // Construct IPv6 address.
 // TODO Bytes in decimals?
 //#define uip_ip6addr(send_addr, 0xfd00, 0x0, 0x0, 0x0, 0xc30c, 0x0, 0x0, 0x1)
@@ -59,6 +65,7 @@ receiver(struct simple_udp_connection *c,
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
   printf("Data Rx: %s\n", data);
+  printf("\n");
 
 
   //TODO hier ga je wrs verschillenden soorten Hidra messages handlen adhv van de inhoud/poort waarop ze aankomen enz?!
@@ -91,20 +98,39 @@ set_global_address(void)
 }
 /*---------------------------------------------------------------------------*/
 static void
+set_send_address(void)
+{
+
+//	uip_ip6addr(&send_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0xc30c, 0, 0, 1);
+//	uip_ip6addr(&send_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0x212, 0x7402, 0x2, 0x202);
+	uip_ip6addr(&send_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0x1); // to the Java ACS Server
+
+	printf("IPv6 send address: ");
+    uip_debug_ipaddr_print(&send_addr);
+    printf("\n");
+}
+/*---------------------------------------------------------------------------*/
+static void
 send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tijdens een protocol
 {
-	if(send_addr != NULL) {
+	if(&send_addr != NULL) { // TODO hidra-r.c:116:16: warning: the comparison will always evaluate as ‘true’ for the address of ‘send_addr’ will never be NULL [-Waddress]
+								// Maar zonder die pointer geeft het echt een error? wat als *(&send_addr), maakt dat een verschil?
+								// Waarom is dit dan niet triviaal? addr = servreg_hack_lookup(SERVICE_ID);
+	    						// 									if(addr != NULL) {
 		static unsigned int message_number;
 		char buf[20];
 
 		printf("Sending unicast to ");
-		uip_debug_ipaddr_print(send_addr);
+		uip_debug_ipaddr_print(&send_addr);
 		printf("\n");
-		sprintf(buf, "Message %d", message_number);
+		sprintf(buf, "Message %d", message_number); //print into the buffer
 		message_number++;
-		simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, send_addr);
+
+		// To send, the same ports are used as were specified in the register-command
+		// Be mindful of strlen(buf) + 1 when unpacking messages TODO good reason for this? otherwise delete
+		simple_udp_sendto(&unicast_connection, buf, strlen(buf)+1, &send_addr);
 	} else {
-		printf("No send_addr given");
+		printf("No send_addr given\n");
 	}
 }
 
@@ -112,12 +138,11 @@ send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tij
 PROCESS_THREAD(hidra_r, ev, data)
 { 
 	PROCESS_BEGIN();
-	
+
 	SENSORS_ACTIVATE(button_sensor);
 
-	ipaddr = set_global_address(); // TODO mag void zijn?
-
-	// TODO: toch create_rpl_dag, maar zonder set_root, dat doet border_router dan?
+	set_send_address();
+	set_global_address(); // TODO mag void zijn?
 
 	// Register a socket, with host and remote port UDP_PORT
 	// NULL parameter as the destination address to allow packets from any address. (fixed IPv6 address can be given)
@@ -129,7 +154,7 @@ PROCESS_THREAD(hidra_r, ev, data)
 	while(1) {
 		// At the click of the button, a packet will be sent
 		PROCESS_WAIT_EVENT_UNTIL((ev==sensors_event) && (data == &button_sensor));
-
+		printf("button pressed\n");
 		send_unicast();
 	}
 	
