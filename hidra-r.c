@@ -128,7 +128,7 @@ send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tij
 
 		// To send, the same ports are used as were specified in the register-command
 		// Be mindful of strlen(buf) + 1 when unpacking messages TODO good reason for this? otherwise delete
-		simple_udp_sendto(&unicast_connection, buf, strlen(buf)+1, &send_addr);
+		simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, &send_addr);
 	} else {
 		printf("No send_addr given\n");
 	}
