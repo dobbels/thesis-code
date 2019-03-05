@@ -1,6 +1,5 @@
 /**
- * Does not create the RPL DAG and therefore does not become the network root.
- * Publishes service with number OWN_SERVICE_ID.
+ *
  */
 
 #include "contiki.h"
@@ -27,32 +26,73 @@
 #define DEBUG DEBUG_PRINT
 #include "net/ip/uip-debug.h"
 
-#define UDP_PORT 1234
+#define ACS_UDP_PORT 1234
+#define SUBJECT_UDP_PORT 4321
 
-static struct simple_udp_connection unicast_connection;
-
-//Example of "setting ip address"
-//uip_ipaddr_t ipaddr;
-//struct uip_conn *c;
-//
-//uip_ipaddr(&ipaddr, 192,168,1,2);
-//c = uip_connect(&ipaddr, UIP_HTONS(80));
+static struct simple_udp_connection unicast_connection_acs;
+static struct simple_udp_connection unicast_connection_subject; //TODO nog een register en aparte receiver_subject? makkelijke scheiding van code, zodat minder if's?
 
 uip_ipaddr_t send_addr;
-
-
-// Construct IPv4 address.
-//#define uip_ipaddr(send_addr, 192, 0, 0, 1);
-// Construct IPv6 address.
-// TODO Bytes in decimals?
-//#define uip_ip6addr(send_addr, 0xfd00, 0x0, 0x0, 0x0, 0xc30c, 0x0, 0x0, 0x1)
-
 
 PROCESS(hidra_r,"HidraR");
 AUTOSTART_PROCESSES(&hidra_r);
 /*---------------------------------------------------------------------------*/
 static void
-receiver(struct simple_udp_connection *c,
+handle_hidra_subject_exchanges(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+        uint16_t datalen)
+{
+	printf("Sending unicast to ");
+	uip_debug_ipaddr_print(sender_addr);
+	printf("\n");
+
+	simple_udp_sendto(c, data, datalen, sender_addr);
+}
+/*---------------------------------------------------------------------------*/
+static void
+receiver_subject(struct simple_udp_connection *c,
+         const uip_ipaddr_t *sender_addr,
+         uint16_t sender_port,
+         const uip_ipaddr_t *receiver_addr,
+         uint16_t receiver_port,
+         const uint8_t *data, //TODO vraag: hoe is deze data eigenlijk opgeslagen? Wrs is zo'n uint8_t een struct met een byte een pointer naar de volgende in de rij? -> zou heel leuk zijn om eindelijk die error weg te krijgen en te kunnen doorklikken naar die declaraties!
+         uint16_t datalen)
+{
+  printf("\nData received from: ");
+  PRINT6ADDR(sender_addr);
+  printf("\nAt port %d from port %d with length %d\n",
+		  receiver_port, sender_port, datalen);
+  printf("Data Rx: %s\n", data);
+  printf("\n");
+
+  handle_hidra_subject_exchanges(c, sender_addr, data, datalen);
+
+}
+/*---------------------------------------------------------------------------*/
+static void
+handle_hidra_acs_exchanges(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+        uint16_t datalen)
+{
+	printf("Sending unicast to ");
+	uip_debug_ipaddr_print(sender_addr);
+	printf("\n");
+
+//	uint8_t expected[datalen] = "HID_CM_IND"; //TODO wat gebeurt er? char -> uint8_t? Wat als de string te kort of the lang?
+
+	if (datalen == strlen("HID_CM_IND")) {
+		//TODO met memcmp? probeer ff in online compiler, zoek simpelste oplossing online voor str pointer met string te vergelijken en test
+
+		simple_udp_sendto(c, data, datalen, sender_addr);
+	} else {
+		printf("Did not receive what was expected.");
+	}
+}
+/*---------------------------------------------------------------------------*/
+static void
+receiver_acs(struct simple_udp_connection *c,
          const uip_ipaddr_t *sender_addr,
          uint16_t sender_port,
          const uip_ipaddr_t *receiver_addr,
@@ -67,9 +107,7 @@ receiver(struct simple_udp_connection *c,
   printf("Data Rx: %s\n", data);
   printf("\n");
 
-
-  //TODO hier ga je wrs verschillenden soorten Hidra messages handlen adhv van de inhoud/poort waarop ze aankomen enz?!
-
+  handle_hidra_acs_exchanges(c, sender_addr, data, datalen);
 
 }
 /*---------------------------------------------------------------------------*/
@@ -111,7 +149,7 @@ set_send_address(void)
 }
 /*---------------------------------------------------------------------------*/
 static void
-send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tijdens een protocol
+send_unicast(void)
 {
 	if(&send_addr != NULL) { // TODO hidra-r.c:116:16: warning: the comparison will always evaluate as ‘true’ for the address of ‘send_addr’ will never be NULL [-Waddress]
 								// Maar zonder die pointer geeft het echt een error? wat als *(&send_addr), maakt dat een verschil?
@@ -127,8 +165,8 @@ send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tij
 		message_number++;
 
 		// To send, the same ports are used as were specified in the register-command
-		// Be mindful of strlen(buf) + 1 when unpacking messages TODO good reason for this? otherwise delete
-		simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, &send_addr);
+		// Be mindful of strlen(buf) + 1 when unpacking messages -> deleted now TODO was there good reason for this?
+		simple_udp_sendto(&unicast_connection_acs, buf, strlen(buf), &send_addr);
 	} else {
 		printf("No send_addr given\n");
 	}
@@ -139,23 +177,27 @@ PROCESS_THREAD(hidra_r, ev, data)
 { 
 	PROCESS_BEGIN();
 
-	SENSORS_ACTIVATE(button_sensor);
+//	SENSORS_ACTIVATE(button_sensor);
 
-	set_send_address();
+//	set_send_address();
 	set_global_address(); // TODO mag void zijn?
 
-	// Register a socket, with host and remote port UDP_PORT
+	// Register a sockets, with the correct host and remote ports
 	// NULL parameter as the destination address to allow packets from any address. (fixed IPv6 address can be given)
-	// Meerdere van deze listeners zijn mogelijk
-	simple_udp_register(&unicast_connection, UDP_PORT,
-						  NULL, UDP_PORT,
-						  receiver);
+	simple_udp_register(&unicast_connection_acs, ACS_UDP_PORT,
+						  NULL, ACS_UDP_PORT,
+						  receiver_acs);
+	simple_udp_register(&unicast_connection_subject, SUBJECT_UDP_PORT,
+							  NULL, SUBJECT_UDP_PORT,
+							  receiver_subject);
 
 	while(1) {
 		// At the click of the button, a packet will be sent
-		PROCESS_WAIT_EVENT_UNTIL((ev==sensors_event) && (data == &button_sensor));
-		printf("button pressed\n");
-		send_unicast();
+//		PROCESS_WAIT_EVENT_UNTIL((ev==sensors_event) && (data == &button_sensor));
+//		printf("button pressed\n");
+//		send_unicast();
+
+		PROCESS_WAIT_EVENT();
 	}
 	
 	PROCESS_END();
