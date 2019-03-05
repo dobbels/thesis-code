@@ -34,6 +34,9 @@ static struct simple_udp_connection unicast_connection_subject; //TODO nog een r
 
 uip_ipaddr_t send_addr;
 
+char HID_CM_IND_SUCCESS = 0;
+char HID_CM_IND_REQ_SUCCESS = 0;
+
 PROCESS(hidra_r,"HidraR");
 AUTOSTART_PROCESSES(&hidra_r);
 /*---------------------------------------------------------------------------*/
@@ -47,7 +50,20 @@ handle_hidra_subject_exchanges(struct simple_udp_connection *c,
 	uip_debug_ipaddr_print(sender_addr);
 	printf("\n");
 
-	simple_udp_sendto(c, data, datalen, sender_addr);
+	uint8_t *first_exchange = "HID_S_R_REQ";
+	char first_exchange_len = strlen(first_exchange);
+
+	if (HID_CM_IND_REQ_SUCCESS && datalen == first_exchange_len && memcmp(data, first_exchange, first_exchange_len) == 0) {
+		uint8_t *response = "HID_S_R_REP";
+		simple_udp_sendto(c, response, strlen(response), sender_addr);
+		HID_CM_IND_REQ_SUCCESS = 0;
+		HID_CM_IND_SUCCESS = 0;
+		printf("\n");
+		printf("End of Hidra exchange with Subject\n");
+	}
+	else {
+		printf("Did not receive from subject what was expected.");
+	}
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -63,7 +79,7 @@ receiver_subject(struct simple_udp_connection *c,
   PRINT6ADDR(sender_addr);
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
-  printf("Data Rx: %s\n", data);
+  printf("Data Rx: %*s\n", datalen, data); //datalen specification: because previous messages remain in buffer
   printf("\n");
 
   handle_hidra_subject_exchanges(c, sender_addr, data, datalen);
@@ -80,14 +96,25 @@ handle_hidra_acs_exchanges(struct simple_udp_connection *c,
 	uip_debug_ipaddr_print(sender_addr);
 	printf("\n");
 
-//	uint8_t expected[datalen] = "HID_CM_IND"; //TODO wat gebeurt er? char -> uint8_t? Wat als de string te kort of the lang?
+	uint8_t *first_exchange = "HID_CM_IND";
+	char first_exchange_len = strlen(first_exchange);
+	uint8_t *second_exchange = "HID_CM_IND_REP";
+	char second_exchange_len = strlen(second_exchange);
 
-	if (datalen == strlen("HID_CM_IND")) {
-		//TODO met memcmp? probeer ff in online compiler, zoek simpelste oplossing online voor str pointer met string te vergelijken en test
-
-		simple_udp_sendto(c, data, datalen, sender_addr);
-	} else {
-		printf("Did not receive what was expected.");
+	if (datalen == first_exchange_len && memcmp(data, first_exchange, first_exchange_len) == 0) {
+		uint8_t *response = "HID_CM_IND_REQ";
+		simple_udp_sendto(c, response, strlen(response), sender_addr);
+		HID_CM_IND_SUCCESS = 1;
+	}
+	else if (HID_CM_IND_SUCCESS
+			&& datalen == second_exchange_len
+			&& memcmp(data, second_exchange, second_exchange_len) == 0) {
+		HID_CM_IND_REQ_SUCCESS = 1;
+		printf("\n");
+		printf("End of Hidra exchange with ACS\n");
+	}
+	else {
+		printf("Did not receive from ACS what was expected.");
 	}
 }
 /*---------------------------------------------------------------------------*/
@@ -104,7 +131,7 @@ receiver_acs(struct simple_udp_connection *c,
   PRINT6ADDR(sender_addr);
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
-  printf("Data Rx: %s\n", data);
+  printf("Data Rx: %*s\n", datalen, data);
   printf("\n");
 
   handle_hidra_acs_exchanges(c, sender_addr, data, datalen);
