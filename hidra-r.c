@@ -30,12 +30,23 @@
 #define SUBJECT_UDP_PORT 4321
 
 static struct simple_udp_connection unicast_connection_acs;
-static struct simple_udp_connection unicast_connection_subject; //TODO nog een register en aparte receiver_subject? makkelijke scheiding van code, zodat minder if's?
+static struct simple_udp_connection unicast_connection_subject;
 
 uip_ipaddr_t send_addr;
 
 char HID_CM_IND_SUCCESS = 0;
 char HID_CM_IND_REQ_SUCCESS = 0;
+
+//TODO als te veel geheugen in gebruik: opslaan in APBR codificatie (je kan velden in struct een bepaald aantal bits geven = bitfields?) en op gebruik uitpakken
+struct hidra_policy {
+	char id;
+	char effect;
+	struct hidra_rule *rule //TODO zorg dat op het einde van een hidra_rule een pointer is naar de volgende, of maak een array met juiste lengte aan
+};
+
+struct hidra_rule {
+	//TODO
+};
 
 PROCESS(hidra_r,"HidraR");
 AUTOSTART_PROCESSES(&hidra_r);
@@ -53,6 +64,7 @@ handle_hidra_subject_exchanges(struct simple_udp_connection *c,
 	uint8_t *first_exchange = "HID_S_R_REQ";
 	char first_exchange_len = strlen(first_exchange);
 
+	//TODO nog beter strcmp() gebruiken? Of niet zeker van null termination overal?
 	if (HID_CM_IND_REQ_SUCCESS && datalen == first_exchange_len && memcmp(data, first_exchange, first_exchange_len) == 0) {
 		uint8_t *response = "HID_S_R_REP";
 		simple_udp_sendto(c, response, strlen(response), sender_addr);
@@ -114,8 +126,11 @@ handle_hidra_acs_exchanges(struct simple_udp_connection *c,
 		printf("End of Hidra exchange with ACS\n");
 	}
 	else {
-		printf("Did not receive from ACS what was expected.");
+		printf("Did not receive from ACS what was expected in the protocol.\n");
 	}
+
+	// Test area: unpack policy into local policy. To be included in the protocol later
+	// TODO map packet to proper bitfield and interpret
 }
 /*---------------------------------------------------------------------------*/
 static void
