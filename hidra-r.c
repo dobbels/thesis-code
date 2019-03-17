@@ -38,14 +38,29 @@ char HID_CM_IND_SUCCESS = 0;
 char HID_CM_IND_REQ_SUCCESS = 0;
 
 //TODO als te veel geheugen in gebruik: opslaan in APBR codificatie (je kan velden in struct een bepaald aantal bits geven = bitfields?) en op gebruik uitpakken
-struct hidra_policy {
-	char id;
-	char effect;
-	struct hidra_rule *rule //TODO zorg dat op het einde van een hidra_rule een pointer is naar de volgende, of maak een array met juiste lengte aan
+struct policy {
+	unsigned char id;
+	unsigned char effect : 1;
+	struct rule *rules;
+} policy;
+
+struct rule {
+	unsigned char id;
+	unsigned char effect : 1;
+	unsigned char periodicity;
+	unsigned char iteration;
+	unsigned char resource;
+	unsigned char action : 3;
+	struct expression *conditionset;
+	struct obligation *obligationset;
 };
 
-struct hidra_rule {
-	//TODO
+struct expression {
+
+};
+
+struct obligation {
+
 };
 
 PROCESS(hidra_r,"HidraR");
@@ -57,7 +72,7 @@ handle_hidra_subject_exchanges(struct simple_udp_connection *c,
 		const uint8_t *data,
         uint16_t datalen)
 {
-	printf("Sending unicast to ");
+	printf("Sending unicast to \n");
 	uip_debug_ipaddr_print(sender_addr);
 	printf("\n");
 
@@ -98,39 +113,143 @@ receiver_subject(struct simple_udp_connection *c,
 
 }
 /*---------------------------------------------------------------------------*/
+static unsigned char
+get_mask_for(int nb_of_bits) {
+	char mask;
+	if (nb_of_bits == 1) {
+		mask = 0x01;
+	} else if (nb_of_bits == 2) {
+		mask = 0x03;
+	} else if (nb_of_bits == 3) {
+		mask = 0x07;
+	} else if (nb_of_bits == 4) {
+		mask = 0x0f;
+	} else if (nb_of_bits == 5) {
+		mask = 0x1f;
+	} else if (nb_of_bits == 6) {
+		mask = 0x3f;
+	} else if (nb_of_bits == 7) {
+		mask = 0x7f;
+	} else if (nb_of_bits == 8) {
+		mask = 0xff;
+	}
+	return mask;
+}
+/*---------------------------------------------------------------------------*/
+/*
+ * The indices are bit indices in a byte array
+ * Preconditions:
+ * 	0 < end_index - start_index <= 8
+ * 	indices are not out of bounds
+ */
+static unsigned char
+get_bits_between(int start_index, int end_index, const uint8_t *data) {
+
+	int start_block = start_index / 8;
+	int end_block = (end_index - 1) / 8;
+	int nb_of_bits = end_index - start_index;
+	char mask1;
+	char mask2;
+
+	if (start_block == end_block) {
+		mask1 = get_mask_for(nb_of_bits);
+		return (data[start_block]>>(8-nb_of_bits)) & mask1;
+	} else {
+		int start_block_relative_index = start_index % 8;
+		mask1 = get_mask_for(8 - start_block_relative_index);
+
+		int end_block_relative_index = end_index % 8;
+		mask2 = get_mask_for(end_block_relative_index);
+
+
+		;
+
+		return ((data[start_block] & mask1) |
+				((data[end_block]>>(8-end_block_relative_index)) & mask2));
+	}
+}
+/*---------------------------------------------------------------------------*/
+static unsigned char
+get_bit(int index, const uint8_t *data) {
+	return get_bits_between(index, index+1, data);
+}
+/*---------------------------------------------------------------------------*/
+static unsigned char
+get_3_bits(int index, const uint8_t *data) {
+	return get_bits_between(index, index+3, data);
+}
+/*---------------------------------------------------------------------------*/
+static void
+print_bits(unsigned char data) {
+	printf("%d%d%d%d%d%d%d%d\n",
+			(data >> 7) & 0x01,
+			(data >> 6) & 0x01,
+			(data >> 5) & 0x01,
+			(data >> 4) & 0x01,
+			(data >> 3) & 0x01,
+			(data >> 2) & 0x01,
+			(data >> 1) & 0x01,
+			(data) & 0x01);
+}
+/*---------------------------------------------------------------------------*/
 static void
 handle_hidra_acs_exchanges(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
         uint16_t datalen)
 {
-	printf("Sending unicast to ");
+	printf("Sending unicast to \n");
 	uip_debug_ipaddr_print(sender_addr);
 	printf("\n");
 
-	uint8_t *first_exchange = "HID_CM_IND";
-	char first_exchange_len = strlen(first_exchange);
-	uint8_t *second_exchange = "HID_CM_IND_REP";
-	char second_exchange_len = strlen(second_exchange);
-
-	if (datalen == first_exchange_len && memcmp(data, first_exchange, first_exchange_len) == 0) {
-		uint8_t *response = "HID_CM_IND_REQ";
-		simple_udp_sendto(c, response, strlen(response), sender_addr);
-		HID_CM_IND_SUCCESS = 1;
-	}
-	else if (HID_CM_IND_SUCCESS
-			&& datalen == second_exchange_len
-			&& memcmp(data, second_exchange, second_exchange_len) == 0) {
-		HID_CM_IND_REQ_SUCCESS = 1;
-		printf("\n");
-		printf("End of Hidra exchange with ACS\n");
-	}
-	else {
-		printf("Did not receive from ACS what was expected in the protocol.\n");
-	}
-
+	///////////////////////////////////////////////////////////////////////////////////
 	// Test area: unpack policy into local policy. To be included in the protocol later
-	// TODO map packet to proper bitfield and interpret
+
+	int starting_index_next_structure = 0;
+	// Unpack policy id and effect and check rule existence mask
+	policy.id = data[0];
+	policy.effect = get_bit(8, data); // to access the first bit
+	if (get_bit(9, data)) { // TODO more efficiency? -> write (data[1] & 0x40) here
+		unsigned char nb_of_rules = get_3_bits(10, data);
+		//TODO
+		while(nb_of_rules) {
+			// decodify rule
+
+			// increment starting_index_next_structure with the right amount
+			nb_of_rules--;
+		}
+	} else {
+		printf("There are no rules\n");
+		policy.rules = NULL;
+	}
+
+	printf("%d\n", policy.id);
+	printf("%d\n", policy.effect);
+	print_bits(policy.effect);
+
+	//End of test area
+	///////////////////////////////////////////////////////////////////////////////////
+
+//	uint8_t *first_exchange = "HID_CM_IND";
+//	char first_exchange_len = strlen(first_exchange);
+//	uint8_t *second_exchange = "HID_CM_IND_REP";
+//	char second_exchange_len = strlen(second_exchange);
+//
+//	if (datalen == first_exchange_len && memcmp(data, first_exchange, first_exchange_len) == 0) {
+//		uint8_t *response = "HID_CM_IND_REQ";
+//		simple_udp_sendto(c, response, strlen(response), sender_addr);
+//		HID_CM_IND_SUCCESS = 1;
+//	}
+//	else if (HID_CM_IND_SUCCESS
+//			&& datalen == second_exchange_len
+//			&& memcmp(data, second_exchange, second_exchange_len) == 0) {
+//		HID_CM_IND_REQ_SUCCESS = 1;
+//		printf("\n");
+//		printf("End of Hidra exchange with ACS\n");
+//	}
+//	else {
+//		printf("Did not receive from ACS what was expected in the protocol.\n");
+//	}
 }
 /*---------------------------------------------------------------------------*/
 static void
