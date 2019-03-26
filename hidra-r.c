@@ -4,8 +4,6 @@
 
 #include "contiki.h"
 #include "lib/random.h"
-#include "sys/ctimer.h"
-#include "sys/etimer.h"
 #include "net/ip/uip.h"
 #include "net/ipv6/uip-ds6.h"
 
@@ -19,7 +17,7 @@
 
 #include "sys/node-id.h"
 
-#include "dev/button-sensor.h"
+#include "policy.h"
 
 // To print the IPv6 addresses in a friendlier way
 #include "debug.h"
@@ -37,31 +35,6 @@ uip_ipaddr_t send_addr;
 char HID_CM_IND_SUCCESS = 0;
 char HID_CM_IND_REQ_SUCCESS = 0;
 
-//TODO als te veel geheugen in gebruik: opslaan in APBR codificatie (je kan velden in struct een bepaald aantal bits geven = bitfields?) en op gebruik uitpakken
-struct policy {
-	unsigned char id;
-	unsigned char effect : 1;
-	struct rule *rules;
-} policy;
-
-struct rule {
-	unsigned char id;
-	unsigned char effect : 1;
-	unsigned char periodicity;
-	unsigned char iteration;
-	unsigned char resource;
-	unsigned char action : 3;
-	struct expression *conditionset;
-	struct obligation *obligationset;
-};
-
-struct expression {
-
-};
-
-struct obligation {
-
-};
 
 PROCESS(hidra_r,"HidraR");
 AUTOSTART_PROCESSES(&hidra_r);
@@ -99,7 +72,7 @@ receiver_subject(struct simple_udp_connection *c,
          uint16_t sender_port,
          const uip_ipaddr_t *receiver_addr,
          uint16_t receiver_port,
-         const uint8_t *data, //TODO vraag: hoe is deze data eigenlijk opgeslagen? Wrs is zo'n uint8_t een struct met een byte een pointer naar de volgende in de rij? -> zou heel leuk zijn om eindelijk die error weg te krijgen en te kunnen doorklikken naar die declaraties!
+         const uint8_t *data,
          uint16_t datalen)
 {
   printf("\nData received from: ");
@@ -113,87 +86,8 @@ receiver_subject(struct simple_udp_connection *c,
 
 }
 /*---------------------------------------------------------------------------*/
-static unsigned char
-get_mask_for(int nb_of_bits) {
-	char mask;
-	if (nb_of_bits == 1) {
-		mask = 0x01;
-	} else if (nb_of_bits == 2) {
-		mask = 0x03;
-	} else if (nb_of_bits == 3) {
-		mask = 0x07;
-	} else if (nb_of_bits == 4) {
-		mask = 0x0f;
-	} else if (nb_of_bits == 5) {
-		mask = 0x1f;
-	} else if (nb_of_bits == 6) {
-		mask = 0x3f;
-	} else if (nb_of_bits == 7) {
-		mask = 0x7f;
-	} else if (nb_of_bits == 8) {
-		mask = 0xff;
-	}
-	return mask;
-}
-/*---------------------------------------------------------------------------*/
-/*
- * The indices are bit indices in a byte array
- * Preconditions:
- * 	0 < end_index - start_index <= 8
- * 	indices are not out of bounds
- */
-static unsigned char
-get_bits_between(int start_index, int end_index, const uint8_t *data) {
-
-	int start_block = start_index / 8;
-	int end_block = (end_index - 1) / 8;
-	int nb_of_bits = end_index - start_index;
-	char mask1;
-	char mask2;
-
-	if (start_block == end_block) {
-		mask1 = get_mask_for(nb_of_bits);
-		return (data[start_block]>>(8-nb_of_bits)) & mask1;
-	} else {
-		int start_block_relative_index = start_index % 8;
-		mask1 = get_mask_for(8 - start_block_relative_index);
-
-		int end_block_relative_index = end_index % 8;
-		mask2 = get_mask_for(end_block_relative_index);
-
-
-		;
-
-		return ((data[start_block] & mask1) |
-				((data[end_block]>>(8-end_block_relative_index)) & mask2));
-	}
-}
-/*---------------------------------------------------------------------------*/
-static unsigned char
-get_bit(int index, const uint8_t *data) {
-	return get_bits_between(index, index+1, data);
-}
-/*---------------------------------------------------------------------------*/
-static unsigned char
-get_3_bits(int index, const uint8_t *data) {
-	return get_bits_between(index, index+3, data);
-}
-/*---------------------------------------------------------------------------*/
 static void
-print_bits(unsigned char data) {
-	printf("%d%d%d%d%d%d%d%d\n",
-			(data >> 7) & 0x01,
-			(data >> 6) & 0x01,
-			(data >> 5) & 0x01,
-			(data >> 4) & 0x01,
-			(data >> 3) & 0x01,
-			(data >> 2) & 0x01,
-			(data >> 1) & 0x01,
-			(data) & 0x01);
-}
-/*---------------------------------------------------------------------------*/
-static void
-handle_hidra_acs_exchanges(struct simple_udp_connection *c,
+set_up_hidra_association(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
         uint16_t datalen)
@@ -203,29 +97,9 @@ handle_hidra_acs_exchanges(struct simple_udp_connection *c,
 	printf("\n");
 
 	///////////////////////////////////////////////////////////////////////////////////
-	// Test area: unpack policy into local policy. To be included in the protocol later
+	// Test area outside Hidra association establishment: unpack policy into local policy. To be included in the protocol later
 
-	int starting_index_next_structure = 0;
-	// Unpack policy id and effect and check rule existence mask
-	policy.id = data[0];
-	policy.effect = get_bit(8, data); // to access the first bit
-	if (get_bit(9, data)) { // TODO more efficiency? -> write (data[1] & 0x40) here
-		unsigned char nb_of_rules = get_3_bits(10, data);
-		//TODO
-		while(nb_of_rules) {
-			// decodify rule
-
-			// increment starting_index_next_structure with the right amount
-			nb_of_rules--;
-		}
-	} else {
-		printf("There are no rules\n");
-		policy.rules = NULL;
-	}
-
-	printf("%d\n", policy.id);
-	printf("%d\n", policy.effect);
-	print_bits(policy.effect);
+	unpack_policy(data, datalen);
 
 	//End of test area
 	///////////////////////////////////////////////////////////////////////////////////
@@ -268,7 +142,7 @@ receiver_acs(struct simple_udp_connection *c,
   printf("Data Rx: %*s\n", datalen, data);
   printf("\n");
 
-  handle_hidra_acs_exchanges(c, sender_addr, data, datalen);
+  set_up_hidra_association(c, sender_addr, data, datalen);
 
 }
 /*---------------------------------------------------------------------------*/
