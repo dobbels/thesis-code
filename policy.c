@@ -40,6 +40,7 @@ struct task {
 struct attribute {
 	unsigned char type : 3;
 	unsigned char bool_value : 1;
+	unsigned char local_reference_value : 3;
 	char *string_value;
 	int int_value;
 	float float_value;
@@ -84,9 +85,10 @@ unpack_policy(const uint8_t *data, uint16_t datalen)
 	print_bits(policy.effect);
 }
 /*---------------------------------------------------------------------------*/
-static void
+static int
 unpack_rule(const uint8_t *data, int bit_index, char rule_index)
-{
+{ //TODO verander nog rule_index door gewoon de juiste rule mee te geven als argument.
+  // 	Dit is namelijk alleen mogelijk doordat je nu ff maar 1 policy hebt. Je moet sowieso pointer naar policy of juiste rule mee geven anders.
 	policy.rules[rule_index].id = get_char_from(bit_index, data);
 	bit_index += 8;
 
@@ -124,57 +126,163 @@ unpack_rule(const uint8_t *data, int bit_index, char rule_index)
 		bit_index += 3;
 	}
 
-	unsigned char nb_of_expressions = get_3_bits_from(10, data) + 1;
+	unsigned char nb_of_expressions = get_3_bits_from(bit_index, data) + 1;
 	bit_index += 3;
 	char current_expression_index = 0;
 	while(nb_of_expressions) {
 
-		bit_index = unpack_expression(data, bit_index, current_expression_index);
+		bit_index = unpack_expression(data, bit_index,
+				&policy.rules[rule_index].conditionset[current_expression_index]);
 
 		nb_of_expressions--;
 		current_expression_index++;
 	}
 
 	if (policy.rules[rule_index].obligationset_mask) {
-		unsigned char nb_of_obligations = get_3_bits_from(10, data) + 1;
+		unsigned char nb_of_obligations = get_3_bits_from(bit_index, data) + 1;
 		bit_index += 3;
 		char current_obligation_index = 0;
 		while(nb_of_obligations) {
 
-			bit_index = unpack_obligation(data, bit_index, current_obligation_index);
+			bit_index = unpack_obligation(data, bit_index,
+					&policy.rules[rule_index].obligationset[current_obligation_index]);
 
 			nb_of_obligations--;
 			current_obligation_index++;
 		}
 	}
+
+	return bit_index;
 }
 /*---------------------------------------------------------------------------*/
-static void
-unpack_expression(const uint8_t *data, int bit_index, char rule_index)
+static int
+unpack_expression(const uint8_t *data, int bit_index, struct expression *exp)
 {
 //	unsigned char function;
-
+	exp->function = get_char_from(bit_index, data);
+	bit_index += 8;
 //	struct attribute *inputset; // if == NULL, then no attributes where given
+	if(get_bit(bit_index,data)) {
+		bit_index += 1;
+		unsigned char nb_of_inputs = get_3_bits_from(bit_index, data) + 1;
+		bit_index += 3;
+		char current_input_index = 0;
+		while(nb_of_inputs) {
+
+			bit_index = unpack_attribute(data, bit_index,
+					&exp->inputset[current_input_index]);
+
+			nb_of_inputs--;
+			current_input_index++;
+		}
+	} else {
+		bit_index += 1;
+		exp->inputset = NULL;
+	}
+
+	return bit_index;
 
 }
 /*---------------------------------------------------------------------------*/
-static void
-unpack_obligation(const uint8_t *data, int bit_index, char rule_index)
+static int
+unpack_obligation(const uint8_t *data, int bit_index, struct obligation *obl)
 {
 //	struct task task;
+	bit_index = unpack_task(data, bit_index, &obl->task);
 //	unsigned char fulfill_on : 2; // a value of 0 : on deny, 1 : on permit, 2 : 'always execute', 3 : undefined
+	if (get_bit(bit_index, data)) {
+		bit_index += 1;
+		obl->fulfill_on = get_bit(bit_index, data);
+		bit_index += 1;
+	} else {
+		bit_index += 1;
+		// Always execute task
+		obl->fulfill_on = 2;
+	}
+
+	return bit_index;
 }
 /*---------------------------------------------------------------------------*/
-static void
-unpack_task(const uint8_t *data, int bit_index, char rule_index)
+static int
+unpack_task(const uint8_t *data, int bit_index, struct task *task)
 {
-	// zie expr
+	//	unsigned char function;
+		task->function = get_char_from(bit_index, data);
+		bit_index += 8;
+	//	struct attribute *inputset; // if == NULL, then no attributes where given
+		if(get_bit(bit_index,data)) {
+			bit_index += 1;
+			unsigned char nb_of_inputs = get_3_bits_from(bit_index, data) + 1;
+			bit_index += 3;
+			char current_input_index = 0;
+			while(nb_of_inputs) {
+
+				bit_index = unpack_attribute(data, bit_index,
+						&task->inputset[current_input_index]);
+
+				nb_of_inputs--;
+				current_input_index++;
+			}
+		} else {
+			bit_index += 1;
+			task->inputset = NULL;
+		}
+
+		return bit_index;
 }
 /*---------------------------------------------------------------------------*/
-static void
-unpack_attribute(const uint8_t *data, int bit_index)
+static int
+unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 {
 //	unsigned char type : 3;
+	attr->type = get_3_bits_from(bit_index, data);
+	bit_index += 3;
+
+	if (attr->type == 0) {
+		// type : BOOLEAN
+		attr->bool_value = get_bit(bit_index, data);
+		bit_index += 1;
+	} else if (attr->type == 1) {
+		// type : BYTE
+		attr->char_value = get_char_from(bit_index, data);
+		bit_index += 8;
+	} else if (attr->type == 2) {
+		// type : INTEGER
+		attr->int_value = get_int_from(bit_index, data);
+		bit_index += 32;
+	} else if (attr->type == 3) {
+		// type : FLOAT
+		attr->float_value = get_float_from(bit_index, data);
+		bit_index += 32;
+	} else if (attr->type == 4) { //TODO should codification include a length specifier? -> would be easier, no?
+		// type : STRING
+		char src[40];
+		char dest[100];
+
+		memset(dest, '\0', sizeof(dest));
+		strcpy(src, "This is tutorialspoint.com");
+		strcpy(dest, src);
+
+		printf("Final copied string : %s\n", dest);
+
+		char *string = get_string_from(bit_index, data);
+		strcpy();attr->string_value
+		//TODO met copystring methode (waarbij je eerst str tot \0 in een andere array zet met get_char_from)
+	} else if (attr->type == 5) {
+		// type : REQUEST REFERENCE
+		attr->char_value = get_char_from(bit_index, data);
+		bit_index += 8;
+	} else if (attr->type == 6) {
+		// type : SYSTEM REFERENCE
+		attr->char_value = get_char_from(bit_index, data);
+		bit_index += 8;
+	} else if (attr->type == 7) {
+		// type : LOCAL REFERENCE
+		attr->local_reference_value = get_3_bits_from(bit_index,data);
+		bit_index += 3;
+	} else {
+		printf("Error while unpacking attribute\n");
+	}
 //	unsigned char bool_value : 1;
 //	char *string_value;
 //	int int_value;
@@ -249,7 +357,24 @@ static unsigned char
 get_char_from(int index, const uint8_t *data) {
 	return get_bits_between(index, index+8, data);
 }
-
+/*---------------------------------------------------------------------------*/
+static int
+get_int_from(int index, const uint8_t *data) {
+	int result = (get_bits_between(index, index+8, data) & 0xff) << 24 |
+			(get_bits_between(index+8, index+16, data)  & 0xff) << 16 |
+			(get_bits_between(index+16, index+24, data)  & 0xff) << 8 |
+			(get_bits_between(index+24, index+32, data) & 0xff);
+	return result;
+}
+/*---------------------------------------------------------------------------*/
+static float
+get_float_from(int index, const uint8_t *data) {
+	float result = (get_bits_between(index, index+8, data) & 0xff) << 24 |
+			(get_bits_between(index+8, index+16, data)  & 0xff) << 16 |
+			(get_bits_between(index+16, index+24, data)  & 0xff) << 8 |
+			(get_bits_between(index+24, index+32, data) & 0xff);
+	return result;
+}
 /*---------------------------------------------------------------------------*/
 static void
 print_bits(unsigned char data) {
