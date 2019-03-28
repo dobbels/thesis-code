@@ -1,0 +1,109 @@
+{
+	"id" : 104 : 01101000
+	"effect" : "PERMIT" : 1
+	rulexistence : 1
+	maxruleindex : 000
+
+	"rules" : [
+		{
+			"id" : 0,
+			"effect" : "DENY" : 0
+			flags : 10001
+			"periodicity" : 4,
+			MaxExpressionIndex : 000
+			"conditionset" : [
+				{
+					"function" : "lowBattery" = 4,
+					inputexistence : 0
+				}
+			]
+			MaxObligationIndex : 000
+			"obligationset" : [
+				{
+					"task" :
+						{
+							"function" : "activate" = 8,
+							inputexistence : 1
+							maxinputindex : 000
+							"inputset" : [
+								{
+									"type" : "SYSTEM_REFERENCE" = 6,
+									"value" : "onMaintenance" = 16
+								}
+							]
+						},
+					fulfillon existence mask : 1
+					"fulfillOn" : "DENY" : 0
+					=> obl->fulfill_on == 0
+				}
+			]
+		},
+		{
+			"id" : 1,
+			"effect" : "PERMIT" = 1,
+			flags : 00001 (?)
+			MaxExpressionIndex : = 2
+			"conditionset" : [
+				{
+					"function" : "<" = 5,
+					"inputset" : [
+						{
+							"type" : "SYSTEM_REFERENCE" = 6,
+							"value" : "bios_upgrades" = 17
+						},
+						{
+							"type" : "BYTE" = 1,
+							"value" : 3
+						}
+					]
+				},
+				{
+					"function" : "contains" = 6,
+					"inputset" : [
+						{
+							"type" : "REQUEST_REFERENCE" = 5,
+							"value" : "roles" = 32
+						},
+						{
+							"type" : "STRING" = 4,
+							"value" : "admin"
+						}
+					]
+				},
+				{
+					"function" : "isTrue" = 7,
+					"inputset" : [
+						{
+							"type" : "SYSTEM_REFERENCE" = 6,
+							"value" : "onMaintenance" = 16
+						},
+						{
+							"type" : "LOCAL_REFERENCE" = 7,
+							"value" : 0
+						},
+						{
+							"type" : "LOCAL_REFERENCE" = 7,
+							"value" : 1
+						}
+					]
+				}
+			]
+			"obligationset" : [
+				{
+					"task" :
+						{
+							"function" : "++" = 9,
+							"inputset" : [
+								{
+									"type" : "SYSTEM_REFERENCE" = 6,
+									"value" : "bios_upgrades" = 17
+								}
+							]
+						},
+					"fulfillOn" : "DENY" = 0
+				}
+			]
+		}
+	]
+}
+

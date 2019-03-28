@@ -5,7 +5,7 @@ struct attribute {
 	uint8_t type : 3;
 	uint8_t bool_value : 1;
 	uint8_t local_reference_value : 3;
-	char *string_value;
+	char string_value[7]; // max number of characters is 6
 	int32_t int_value; //Comes from java => 4 bytes
 	float float_value;
 	uint8_t char_value;
@@ -45,7 +45,9 @@ struct rule {
 struct policy {
 	uint8_t id;
 	uint8_t effect : 1;
-	struct rule *rules;
+	uint8_t rule_existence : 1;
+	struct rule rules[8]; // For current codification, this is the max number of rules in a policy
+						  // TODO werkt dit toch zonder [8]? Bij bvb inputset en conditionset werkt het zomaar zonder segmentation fault??
 };
 
 static void unpack_policy(const uint8_t *data, uint16_t datalen);

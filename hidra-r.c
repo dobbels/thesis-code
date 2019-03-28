@@ -4,7 +4,6 @@
 #include "net/ipv6/uip-ds6.h"
 
 #include "simple-udp.h"
-#include "servreg-hack.h" //TODO verwijder, net als servreg in Makefile
 
 #include "net/rpl/rpl.h"
 
@@ -88,13 +87,13 @@ set_up_hidra_association(struct simple_udp_connection *c,
 		const uint8_t *data,
         uint16_t datalen)
 {
-	printf("Sending unicast to \n");
-	uip_debug_ipaddr_print(sender_addr);
-	printf("\n");
-
 	///////////////////////////////////////////////////////////////////////////////////
 	// Test area outside Hidra association establishment: unpack policy into local policy. To be included in the protocol later
 
+//	int i = 0;
+//	for ( ; i < datalen ; i++) {
+//		print_bits(data[i]);
+//	}
 	unpack_policy(data, datalen);
 
 	//End of test area
@@ -212,17 +211,26 @@ struct policy policy;
 static void
 unpack_policy(const uint8_t *data, uint16_t datalen)
 {
+//	printf("datalen : %d\n",datalen);
+//	printf("Dus max bit index : %d\n",datalen*8 - 1);
 	int starting_index_next_structure = 0;
 	// Unpack policy id and effect and check rule existence mask
 	policy.id = data[0];
 	policy.effect = get_bit(8, data); // to access the first bit
+
+	printf("policy.id : %d\n", policy.id);
+	printf("policy.effect : %d\n", policy.effect);
 	if (get_bit(9, data)) { // TODO more efficiency? -> write (data[1] & 0x40) here
+		policy.rule_existence = 1;
 		uint8_t nb_of_rules = get_3_bits_from(10, data) + 1;
+//		printf("nb_of_rules : %d\n",nb_of_rules);
 		uint8_t current_rule_index = 0;
 		starting_index_next_structure = 13;
 		while(nb_of_rules) {
 			//TODO ? check every time if datalen*8 is still >= starting_index_next_structure
 
+//			printf("Next rule: \n");
+//			printf("starting_index_next_structure :  %d\n", starting_index_next_structure);
 			// decodify rule and set starting_index_next_structure for the next rule
 			starting_index_next_structure = unpack_rule(data, starting_index_next_structure,
 					&policy.rules[current_rule_index]);
@@ -232,18 +240,13 @@ unpack_policy(const uint8_t *data, uint16_t datalen)
 		}
 	} else {
 		printf("There are no rules\n");
-		policy.rules = NULL;
+		policy.rule_existence = 0;
 	}
-
-	printf("%d\n", policy.id);
-	printf("%d\n", policy.effect);
-	print_bits(policy.effect);
 }
 /*---------------------------------------------------------------------------*/
 static int
 unpack_rule(const uint8_t *data, int bit_index, struct rule *rule)
-{ //TODO verander nog rule_index door gewoon de juiste rule mee te geven als argument.
-  // 	Dit is namelijk alleen mogelijk doordat je nu ff maar 1 policy hebt. Je moet sowieso pointer naar policy of juiste rule mee geven anders.
+{
 	rule->id = get_char_from(bit_index, data);
 	bit_index += 8;
 
@@ -281,8 +284,18 @@ unpack_rule(const uint8_t *data, int bit_index, struct rule *rule)
 		bit_index += 3;
 	}
 
+	printf("\n");
+	printf("rule->id : %d\n", rule->id);
+	printf("rule->effect : %d\n", rule->effect);
+	printf("mask '%d' for rule->periodicity : %d\n", rule->periodicity_mask, rule->periodicity);
+	printf("mask '%d' for rule->iteration :  %d\n", rule->iteration_mask, rule->iteration);
+	printf("mask '%d' for rule->resource : %d\n", rule->resource_mask, rule->resource);
+	printf("mask '%d' for rule->action : %d\n", rule->action_mask, rule->action);
+	printf("mask '%d' for rule->obligationset : %d\n", rule->obligationset_mask, rule->obligationset);
+
 	uint8_t nb_of_expressions = get_3_bits_from(bit_index, data) + 1;
 	bit_index += 3;
+	printf("nb_of_expressions : %d\n", nb_of_expressions);
 	uint8_t current_expression_index = 0;
 	while(nb_of_expressions) {
 
@@ -296,6 +309,7 @@ unpack_rule(const uint8_t *data, int bit_index, struct rule *rule)
 	if (rule->obligationset_mask) {
 		uint8_t nb_of_obligations = get_3_bits_from(bit_index, data) + 1;
 		bit_index += 3;
+		printf("nb_of_obligations : %d\n", nb_of_obligations);
 		uint8_t current_obligation_index = 0;
 		while(nb_of_obligations) {
 
@@ -316,6 +330,8 @@ unpack_expression(const uint8_t *data, int bit_index, struct expression *exp)
 //	uint8_t function;
 	exp->function = get_char_from(bit_index, data);
 	bit_index += 8;
+	printf("\n");
+	printf("exp->function : %d\n", exp->function);
 //	struct attribute *inputset; // if == NULL, then no attributes where given
 	if(get_bit(bit_index,data)) {
 		bit_index += 1;
@@ -334,6 +350,8 @@ unpack_expression(const uint8_t *data, int bit_index, struct expression *exp)
 		bit_index += 1;
 		exp->inputset = NULL;
 	}
+
+//	printf("exp->inputset (pointer or NULL) : %d\n", exp->inputset);
 
 	return bit_index;
 
@@ -355,6 +373,8 @@ unpack_obligation(const uint8_t *data, int bit_index, struct obligation *obl)
 		obl->fulfill_on = 2;
 	}
 
+	printf("\n");
+	printf("obl->fulfill_on : %d\n", obl->fulfill_on);
 	return bit_index;
 }
 /*---------------------------------------------------------------------------*/
@@ -364,6 +384,9 @@ unpack_task(const uint8_t *data, int bit_index, struct task *task)
 	//	uint8_t function;
 		task->function = get_char_from(bit_index, data);
 		bit_index += 8;
+		printf("\n");
+		printf("exp->function : %d\n", task->function);
+
 	//	struct attribute *inputset; // if == NULL, then no attributes where given
 		if(get_bit(bit_index,data)) {
 			bit_index += 1;
@@ -383,6 +406,8 @@ unpack_task(const uint8_t *data, int bit_index, struct task *task)
 			task->inputset = NULL;
 		}
 
+//		printf("exp->inputset (pointer or NULL) : %d\n", task->inputset);
+
 		return bit_index;
 }
 /*---------------------------------------------------------------------------*/
@@ -390,52 +415,72 @@ static int
 unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 {
 //	uint8_t type : 3;
+//	printf("\n");
+//	printf("bit_index : %d\n", bit_index);
+//	print_bits(get_char_from(bit_index, data));
+//	print_bits(get_3_bits_from(bit_index, data));
+//	printf("get_3_bits_from(bit_index, data) : %d\n", get_3_bits_from(bit_index, data));
+
+//	uint8_t temp = get_3_bits_from(bit_index, data);
+//	printf("temp : %d\n", temp);
+
 	attr->type = get_3_bits_from(bit_index, data);
 	bit_index += 3;
+
+	printf("\n");
+	printf("attr->type : %d\n", attr->type);
 
 	if (attr->type == 0) {
 		// type : BOOLEAN
 		//	uint8_t bool_value : 1;
 		attr->bool_value = get_bit(bit_index, data);
 		bit_index += 1;
+		printf("attr->bool_value : %d\n", attr->bool_value);
 	} else if (attr->type == 1) {
 		// type : BYTE
 		//	uint8_t char_value;
 		attr->char_value = get_char_from(bit_index, data);
 		bit_index += 8;
+		printf("attr->char_value (BYTE) : %d\n", attr->char_value);
 	} else if (attr->type == 2) {
 		// type : INTEGER
 		//	int int_value;
 		attr->int_value = get_int_from(bit_index, data);
 		bit_index += 32;
+		printf("attr->int_value, misschien niet volledig geprint (%d vs int32_t) : %d\n", attr->int_value);
 	} else if (attr->type == 3) {
 		// type : FLOAT
 		//	float float_value;
 		attr->float_value = get_float_from(bit_index, data);
 		bit_index += 32;
+		printf("attr->float_value : %f\n", attr->float_value);
 	} else if (attr->type == 4) { //TODO include a length specifier in codification? Is a lot easier in this calculation
 		// type : STRING
 		//	char *string_value;
 		int nb_of_characters = 0;
 		int bit_index_copy = bit_index;
 		while(get_char_from(bit_index_copy, data) != '\0') {
+//			printf("%c\n",get_char_from(bit_index_copy, data));
 			nb_of_characters += 1;
 			bit_index_copy += 8;
 		}
-		printf("String attribute length : %d\n", nb_of_characters);
-		char dest[nb_of_characters];
+		printf("nb_of_characters : %d\n", nb_of_characters);
+		char dest[nb_of_characters+1];
+//		memset(dest, '\0', sizeof(dest));
 		int char_index = 0;
 		while(get_char_from(bit_index, data) != '\0') {
 			dest[char_index] = get_char_from(bit_index, data);
+//			printf("%c\n",dest[char_index]);
+			char_index += 1;
 			bit_index += 8;
 		}
-		bit_index += 8; //TODO \0 character is 8 bits, right?
+		bit_index += 8; //TODO \0 character is 8 bits, right? Of is 3 bits?
 
-		memset(dest, '\0', sizeof(dest));
+//		printf("dest : %s\n", dest);
 
 		strcpy(attr->string_value, dest);
 
-		printf("String attribute : %s\n", attr->string_value);
+		printf("attr->string_value : %s\n", attr->string_value);
 
 		// TODO puts() is mss een handige methode om strings te printen. Voegt ook zelf een \n character toe
 	} else if (attr->type == 5) {
@@ -443,16 +488,19 @@ unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 		//	uint8_t char_value;
 		attr->char_value = get_char_from(bit_index, data);
 		bit_index += 8;
+		printf("attr->char_value (REQUEST) : %d\n", attr->char_value);
 	} else if (attr->type == 6) {
 		// type : SYSTEM REFERENCE
 		//	uint8_t char_value;
 		attr->char_value = get_char_from(bit_index, data);
 		bit_index += 8;
+		printf("attr->char_value (SYSTEM) : %d\n", attr->char_value);
 	} else if (attr->type == 7) {
 		// type : LOCAL REFERENCE
 		//	uint8_t char_value : 3;
 		attr->local_reference_value = get_3_bits_from(bit_index,data);
 		bit_index += 3;
+		printf("attr->local_reference_value (LOCAL) : %d\n", attr->local_reference_value);
 	} else {
 		printf("Error while unpacking attribute\n");
 	}
@@ -498,9 +546,19 @@ get_bits_between(int start_index, int end_index, const uint8_t *data) {
 	char mask1;
 	char mask2;
 
+//	printf("\n");
+//	printf("start_index: %d\n",start_index);
+//	printf("end_index: %d\n",end_index);
+//	printf("start_block: %d\n",start_block);
+//	printf("end_block: %d\n",end_block);
+//	printf("nb_of_bits: %d\n",nb_of_bits);
+
 	if (start_block == end_block) {
 		mask1 = get_mask_for(nb_of_bits);
-		return (data[start_block]>>(8-nb_of_bits)) & mask1;
+//		printf("mask1: %d\n",mask1);
+//		printf("data[start_block]: %d\n",data[start_block]);
+//		printf("(data[start_block]>>(8-(start_index%8 + nb_of_bits))) & mask1: %d\n",(data[start_block]>>(8-(start_index%8 + nb_of_bits))) & mask1);
+		return (data[start_block]>>(8-(start_index%8 + nb_of_bits))) & mask1;
 	} else {
 		int start_block_relative_index = start_index % 8;
 		mask1 = get_mask_for(8 - start_block_relative_index);
@@ -508,7 +566,9 @@ get_bits_between(int start_index, int end_index, const uint8_t *data) {
 		int end_block_relative_index = end_index % 8;
 		mask2 = get_mask_for(end_block_relative_index);
 
-		return ((data[start_block] & mask1) |
+		int nb_of_bits_in_next_block = end_block_relative_index;
+
+		return ((data[start_block] & mask1) << nb_of_bits_in_next_block |
 				((data[end_block]>>(8-end_block_relative_index)) & mask2));
 	}
 }
