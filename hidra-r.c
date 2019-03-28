@@ -472,11 +472,7 @@ unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 		for (char_index = 0 ; char_index < nb_of_characters ; char_index++) {
 			attr->string_value[char_index] = get_char_from(bit_index, data);
 //			printf("attr->string_value[%d] %c\n",char_index, attr->string_value[char_index]);
-			printf("attr->string_value[%d] %c\n",2, attr->string_value[2]);
 			bit_index += 8;
-		}
-		for (char_index = 0 ; char_index < nb_of_characters ; char_index++) {
-			printf("attr->string_value[%d] %c\n",char_index, attr->string_value[char_index]);
 		}
 
 //		attr->string_value[nb_of_characters] = '\0';
