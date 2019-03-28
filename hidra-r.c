@@ -291,7 +291,7 @@ unpack_rule(const uint8_t *data, int bit_index, struct rule *rule)
 	printf("mask '%d' for rule->iteration :  %d\n", rule->iteration_mask, rule->iteration);
 	printf("mask '%d' for rule->resource : %d\n", rule->resource_mask, rule->resource);
 	printf("mask '%d' for rule->action : %d\n", rule->action_mask, rule->action);
-	printf("mask '%d' for rule->obligationset : %d\n", rule->obligationset_mask, rule->obligationset);
+	printf("mask '%d' for rule->obligationset", rule->obligationset_mask);
 
 	uint8_t nb_of_expressions = get_3_bits_from(bit_index, data) + 1;
 	bit_index += 3;
@@ -335,6 +335,7 @@ unpack_expression(const uint8_t *data, int bit_index, struct expression *exp)
 //	struct attribute *inputset; // if == NULL, then no attributes where given
 	if(get_bit(bit_index,data)) {
 		bit_index += 1;
+		exp->input_existence = 1;
 		uint8_t nb_of_inputs = get_3_bits_from(bit_index, data) + 1;
 		bit_index += 3;
 		uint8_t current_input_index = 0;
@@ -348,7 +349,7 @@ unpack_expression(const uint8_t *data, int bit_index, struct expression *exp)
 		}
 	} else {
 		bit_index += 1;
-		exp->inputset = NULL;
+		exp->input_existence = 0;
 	}
 
 //	printf("exp->inputset (pointer or NULL) : %d\n", exp->inputset);
@@ -390,6 +391,7 @@ unpack_task(const uint8_t *data, int bit_index, struct task *task)
 	//	struct attribute *inputset; // if == NULL, then no attributes where given
 		if(get_bit(bit_index,data)) {
 			bit_index += 1;
+			task->input_existence = 1;
 			uint8_t nb_of_inputs = get_3_bits_from(bit_index, data) + 1;
 			bit_index += 3;
 			uint8_t current_input_index = 0;
@@ -403,7 +405,7 @@ unpack_task(const uint8_t *data, int bit_index, struct task *task)
 			}
 		} else {
 			bit_index += 1;
-			task->inputset = NULL;
+			task->input_existence = 0;
 		}
 
 //		printf("exp->inputset (pointer or NULL) : %d\n", task->inputset);
@@ -447,42 +449,40 @@ unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 		//	int int_value;
 		attr->int_value = get_int_from(bit_index, data);
 		bit_index += 32;
+		// TODO hidra-r.c:450:3: warning: format ‘%d’ expects argument of type ‘int’, but argument 2 has type ‘int32_t’ [-Wformat]
 		printf("attr->int_value, misschien niet volledig geprint (%d vs int32_t) : %d\n", attr->int_value);
 	} else if (attr->type == 3) {
 		// type : FLOAT
 		//	float float_value;
 		attr->float_value = get_float_from(bit_index, data);
 		bit_index += 32;
+		// TODO hidra-r.c:456:3: warning: format ‘%f’ expects argument of type ‘double’, but argument 2 has type ‘float’ [-Wformat]
+		// Normaal lukt die cast van float naar double wel?!
 		printf("attr->float_value : %f\n", attr->float_value);
 	} else if (attr->type == 4) { //TODO include a length specifier in codification? Is a lot easier in this calculation
 		// type : STRING
 		//	char *string_value;
-		int nb_of_characters = 0;
-		int bit_index_copy = bit_index;
-		while(get_char_from(bit_index_copy, data) != '\0') {
-//			printf("%c\n",get_char_from(bit_index_copy, data));
-			nb_of_characters += 1;
-			bit_index_copy += 8;
-		}
+		int nb_of_characters = get_3_bits_from(bit_index, data);
+		bit_index += 3;
 		printf("nb_of_characters : %d\n", nb_of_characters);
-		char dest[nb_of_characters+1];
-//		memset(dest, '\0', sizeof(dest));
-		int char_index = 0;
-		while(get_char_from(bit_index, data) != '\0') {
-			dest[char_index] = get_char_from(bit_index, data);
-//			printf("%c\n",dest[char_index]);
-			char_index += 1;
+
+		memset(attr->string_value, '\0', sizeof(attr->string_value));
+
+		int char_index;
+		for (char_index = 0 ; char_index < nb_of_characters ; char_index++) {
+			attr->string_value[char_index] = get_char_from(bit_index, data);
+//			printf("attr->string_value[%d] %c\n",char_index, attr->string_value[char_index]);
+			printf("attr->string_value[%d] %c\n",2, attr->string_value[2]);
 			bit_index += 8;
 		}
-		bit_index += 8; //TODO \0 character is 8 bits, right? Of is 3 bits?
+		for (char_index = 0 ; char_index < nb_of_characters ; char_index++) {
+			printf("attr->string_value[%d] %c\n",char_index, attr->string_value[char_index]);
+		}
 
-//		printf("dest : %s\n", dest);
+//		attr->string_value[nb_of_characters] = '\0';
 
-		strcpy(attr->string_value, dest);
-
-		printf("attr->string_value : %s\n", attr->string_value);
-
-		// TODO puts() is mss een handige methode om strings te printen. Voegt ook zelf een \n character toe
+		printf("attr->string_value : \"%s\"\n", attr->string_value);
+//		puts(attr->string_value);
 	} else if (attr->type == 5) {
 		// type : REQUEST REFERENCE
 		//	uint8_t char_value;

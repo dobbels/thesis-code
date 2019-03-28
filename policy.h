@@ -13,12 +13,14 @@ struct attribute {
 
 struct expression {
 	uint8_t function;
-	struct attribute *inputset; // if == NULL, then no attributes where given
+	uint8_t input_existence : 1;
+	struct attribute inputset[1]; // if == NULL, then no attributes where given
 };
 
 struct task {
 	uint8_t function;
-	struct attribute *inputset; // if == NULL, then no attributes where given
+	uint8_t input_existence : 1;
+	struct attribute inputset[1]; // if == NULL, then no attributes where given
 };
 
 struct obligation {
@@ -37,16 +39,16 @@ struct rule {
 	uint8_t resource;
 	uint8_t action_mask : 1;
 	uint8_t action : 3;
-	struct expression *conditionset;// TODO is aantal altijd af te leiden / te berekenen of best een variabele toevoegen?
+	struct expression conditionset[3];// TODO is aantal altijd af te leiden / te berekenen of best een variabele toevoegen?
 	uint8_t obligationset_mask : 1;
-	struct obligation *obligationset;
+	struct obligation obligationset[1];
 };
 
 struct policy {
 	uint8_t id;
 	uint8_t effect : 1;
 	uint8_t rule_existence : 1;
-	struct rule rules[8]; // For current codification, this is the max number of rules in a policy
+	struct rule rules[1]; // For current codification, 8 is the max number of rules in a policy
 						  // TODO werkt dit toch zonder [8]? Bij bvb inputset en conditionset werkt het zomaar zonder segmentation fault??
 };
 
