@@ -447,13 +447,14 @@ unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 	} else if (attr->type == 2) {
 		// type : INTEGER
 		//	int int_value;
-		attr->int_value = get_int_from(bit_index, data);
-		bit_index += 32;
+		attr->int_value = get_int16_from(bit_index, data);
+		bit_index += 16;
 		// TODO hidra-r.c:450:3: warning: format ‘%d’ expects argument of type ‘int’, but argument 2 has type ‘int32_t’ [-Wformat]
-		printf("attr->int_value, misschien niet volledig geprint (%d vs int32_t) : %d\n", attr->int_value);
+		printf("attr->int_value : %d\n", attr->int_value);
 	} else if (attr->type == 3) {
 		// type : FLOAT
 		//	float float_value;
+		printf("Warning: Float not yet supported by policy\n");
 		attr->float_value = get_float_from(bit_index, data);
 		bit_index += 32;
 		// TODO hidra-r.c:456:3: warning: format ‘%f’ expects argument of type ‘double’, but argument 2 has type ‘float’ [-Wformat]
@@ -584,21 +585,20 @@ get_char_from(int index, const uint8_t *data) {
 	return get_bits_between(index, index+8, data);
 }
 /*---------------------------------------------------------------------------*/
-static int32_t
-get_int_from(int index, const uint8_t *data) {
-	int32_t result = (((int32_t)get_bits_between(index, index+8, data)) & 0xff) << 24 |
-			((int32_t)get_bits_between(index+8, index+16, data)  & 0xff) << 16 |
-			(get_bits_between(index+16, index+24, data)  & 0xff) << 8 |
-			(get_bits_between(index+24, index+32, data) & 0xff);
+static int16_t
+get_int16_from(int index, const uint8_t *data) {
+	int16_t result = ((((int16_t)get_char_from(index, data)) & 0xff) << 8 |
+			(get_char_from(index+8, data) & 0xff));
+	printf("%d\n", result);
 	return result;
 }
 /*---------------------------------------------------------------------------*/
 static float
 get_float_from(int index, const uint8_t *data) {
-	int32_t result = (((int32_t)get_bits_between(index, index+8, data)) & 0xff) << 24 |
-				((int32_t)get_bits_between(index+8, index+16, data)  & 0xff) << 16 |
-				(get_bits_between(index+16, index+24, data)  & 0xff) << 8 |
-				(get_bits_between(index+24, index+32, data) & 0xff);
+	int32_t result = (((int32_t)get_char_from(index, data)) & 0xff) << 24 |
+				((int32_t)get_char_from(index+8, data)  & 0xff) << 16 |
+				(get_char_from(index+16, data)  & 0xff) << 8 |
+				(get_char_from(index+24, data) & 0xff);
 	return *((float*)&result);
 }
 /*---------------------------------------------------------------------------*/

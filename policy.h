@@ -6,7 +6,7 @@ struct attribute {
 	uint8_t bool_value : 1;
 	uint8_t local_reference_value : 3;
 	char string_value[7]; // max number of characters is 6
-	int32_t int_value; //Comes from java => 4 bytes
+	int16_t int_value; //Comes from java => 4 bytes
 	float float_value;
 	uint8_t char_value;
 };
@@ -14,7 +14,7 @@ struct attribute {
 struct expression {
 	uint8_t function;
 	uint8_t input_existence : 1;
-	struct attribute inputset[1]; // if == NULL, then no attributes where given
+	struct attribute inputset[3]; // if == NULL, then no attributes where given
 };
 
 struct task {
@@ -48,7 +48,7 @@ struct policy {
 	uint8_t id;
 	uint8_t effect : 1;
 	uint8_t rule_existence : 1;
-	struct rule rules[1]; // For current codification, 8 is the max number of rules in a policy
+	struct rule rules[2]; // For current codification, 8 is the max number of rules in a policy
 						  // TODO werkt dit toch zonder [8]? Bij bvb inputset en conditionset werkt het zomaar zonder segmentation fault??
 };
 
@@ -74,7 +74,7 @@ static uint8_t get_3_bits_from(int index, const uint8_t *data);
 
 static uint8_t get_char_from(int index, const uint8_t *data);
 
-static int32_t get_int_from(int index, const uint8_t *data);
+static int16_t get_int16_from(int index, const uint8_t *data);
 
 static float get_float_from(int index, const uint8_t *data);
 
