@@ -5,7 +5,8 @@ struct attribute {
 	uint8_t type : 3;
 	uint8_t bool_value : 1;
 	uint8_t local_reference_value : 3;
-	char string_value[7]; // max number of characters is 6
+	uint8_t string_length : 3; // max number of characters is 6
+	char *string_value;
 	int16_t int_value; //Comes from java => 4 bytes
 	float float_value;
 	uint8_t char_value;
@@ -13,14 +14,16 @@ struct attribute {
 
 struct expression {
 	uint8_t function;
-	uint8_t input_existence : 1;
-	struct attribute inputset[3]; // if == NULL, then no attributes where given
+	uint8_t input_existence : 1; // if == 0, then no attributes where given
+	uint8_t max_input_index : 3;
+	struct attribute *inputset;
 };
 
 struct task {
 	uint8_t function;
 	uint8_t input_existence : 1;
-	struct attribute inputset[1]; // if == NULL, then no attributes where given
+	uint8_t max_input_index : 3;
+	struct attribute *inputset; // if == NULL, then no attributes where given
 };
 
 struct obligation {
@@ -39,20 +42,24 @@ struct rule {
 	uint8_t resource;
 	uint8_t action_mask : 1;
 	uint8_t action : 3;
-	struct expression conditionset[3];// TODO is aantal altijd af te leiden / te berekenen of best een variabele toevoegen?
+	uint8_t max_condition_index : 3;
+	struct expression *conditionset;
 	uint8_t obligationset_mask : 1;
-	struct obligation obligationset[1];
+	uint8_t max_obligation_index : 3;
+	struct obligation *obligationset;
 };
 
 struct policy {
 	uint8_t id;
 	uint8_t effect : 1;
 	uint8_t rule_existence : 1;
-	struct rule rules[2]; // For current codification, 8 is the max number of rules in a policy
-						  // TODO werkt dit toch zonder [8]? Bij bvb inputset en conditionset werkt het zomaar zonder segmentation fault??
+	uint8_t max_rule_index : 3; // Necessary to be able to iterate over all rules
+								// For current codification, 8 is the max number of rules in a policy, therefore 7 is the max max_rule_index
+	struct rule *rules;
 };
 
-static void unpack_policy(const uint8_t *data, uint16_t datalen);
+//TODO niet meer static, want dan kan je de functies niet in een ander bestand gebruiken
+static void unpack_policy(const uint8_t *data, uint16_t datalen, struct policy *policy);
 
 static int unpack_rule(const uint8_t *data, int bit_index, struct rule *rule);
 

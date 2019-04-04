@@ -41,7 +41,7 @@
 		{
 			"id" : 1,
 			"effect" : "PERMIT" = 1,
-			flags : 00001 (?)
+			flags : 00001
 			MaxExpressionIndex : = 2
 			"conditionset" : [
 				{

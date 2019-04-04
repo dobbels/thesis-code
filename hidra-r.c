@@ -30,6 +30,7 @@ uip_ipaddr_t send_addr;
 char HID_CM_IND_SUCCESS = 0;
 char HID_CM_IND_REQ_SUCCESS = 0;
 
+struct policy policy;
 
 PROCESS(hidra_r,"HidraR");
 AUTOSTART_PROCESSES(&hidra_r);
@@ -94,7 +95,7 @@ set_up_hidra_association(struct simple_udp_connection *c,
 //	for ( ; i < datalen ; i++) {
 //		print_bits(data[i]);
 //	}
-	unpack_policy(data, datalen);
+	unpack_policy(data, datalen, &policy);
 
 	//End of test area
 	///////////////////////////////////////////////////////////////////////////////////
@@ -198,8 +199,6 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 ///////////////////
 //POLICY RELATED DEFINITIONS
-struct policy policy;
-
 //TODO To include:
 // System attribute reference table (max nb: 256)
 // Request attribute reference table (max nb: 256)
@@ -209,38 +208,42 @@ struct policy policy;
 // Target resource table (max nb: 256)
 
 static void
-unpack_policy(const uint8_t *data, uint16_t datalen)
+unpack_policy(const uint8_t *data, uint16_t datalen, struct policy *dest_policy)
 {
 //	printf("datalen : %d\n",datalen);
 //	printf("Dus max bit index : %d\n",datalen*8 - 1);
 	int starting_index_next_structure = 0;
 	// Unpack policy id and effect and check rule existence mask
-	policy.id = data[0];
-	policy.effect = get_bit(8, data); // to access the first bit
+	dest_policy->id = data[0];
+	dest_policy->effect = get_bit(8, data); // to access the first bit
 
-	printf("policy.id : %d\n", policy.id);
-	printf("policy.effect : %d\n", policy.effect);
+	printf("policy.id : %d\n", dest_policy->id);
+	printf("policy.effect : %d\n", dest_policy->effect);
 	if (get_bit(9, data)) { // TODO more efficiency? -> write (data[1] & 0x40) here
-		policy.rule_existence = 1;
-		uint8_t nb_of_rules = get_3_bits_from(10, data) + 1;
+		dest_policy->rule_existence = 1;
+		dest_policy->max_rule_index = get_3_bits_from(10, data);
+		uint8_t nb_of_rules = dest_policy->max_rule_index + 1;
 //		printf("nb_of_rules : %d\n",nb_of_rules);
+
+		// Allocate the necessary memory in the heap for the specified number of rules
+		dest_policy->rules = malloc(nb_of_rules * sizeof(struct rule));
+
 		uint8_t current_rule_index = 0;
 		starting_index_next_structure = 13;
 		while(nb_of_rules) {
-			//TODO ? check every time if datalen*8 is still >= starting_index_next_structure
 
 //			printf("Next rule: \n");
 //			printf("starting_index_next_structure :  %d\n", starting_index_next_structure);
 			// decodify rule and set starting_index_next_structure for the next rule
 			starting_index_next_structure = unpack_rule(data, starting_index_next_structure,
-					&policy.rules[current_rule_index]);
+					&(dest_policy->rules[current_rule_index]));
 
 			nb_of_rules--;
 			current_rule_index++;
 		}
 	} else {
 		printf("There are no rules\n");
-		policy.rule_existence = 0;
+		dest_policy->rule_existence = 0;
 	}
 }
 /*---------------------------------------------------------------------------*/
@@ -291,11 +294,15 @@ unpack_rule(const uint8_t *data, int bit_index, struct rule *rule)
 	printf("mask '%d' for rule->iteration :  %d\n", rule->iteration_mask, rule->iteration);
 	printf("mask '%d' for rule->resource : %d\n", rule->resource_mask, rule->resource);
 	printf("mask '%d' for rule->action : %d\n", rule->action_mask, rule->action);
-	printf("mask '%d' for rule->obligationset", rule->obligationset_mask);
+	printf("mask '%d' for rule->obligationset\n", rule->obligationset_mask);
 
-	uint8_t nb_of_expressions = get_3_bits_from(bit_index, data) + 1;
+	rule->max_condition_index = get_3_bits_from(bit_index, data);
 	bit_index += 3;
+	uint8_t nb_of_expressions = rule->max_condition_index + 1;
 	printf("nb_of_expressions : %d\n", nb_of_expressions);
+
+	rule->conditionset = malloc(nb_of_expressions * sizeof(struct expression));
+
 	uint8_t current_expression_index = 0;
 	while(nb_of_expressions) {
 
@@ -307,9 +314,13 @@ unpack_rule(const uint8_t *data, int bit_index, struct rule *rule)
 	}
 
 	if (rule->obligationset_mask) {
-		uint8_t nb_of_obligations = get_3_bits_from(bit_index, data) + 1;
+		rule->max_obligation_index = get_3_bits_from(bit_index, data);
 		bit_index += 3;
+		uint8_t nb_of_obligations = rule->max_obligation_index + 1;
 		printf("nb_of_obligations : %d\n", nb_of_obligations);
+
+		rule->obligationset = malloc(nb_of_obligations * sizeof(struct obligation));
+
 		uint8_t current_obligation_index = 0;
 		while(nb_of_obligations) {
 
@@ -336,8 +347,13 @@ unpack_expression(const uint8_t *data, int bit_index, struct expression *exp)
 	if(get_bit(bit_index,data)) {
 		bit_index += 1;
 		exp->input_existence = 1;
-		uint8_t nb_of_inputs = get_3_bits_from(bit_index, data) + 1;
+
+		exp->max_input_index = get_3_bits_from(bit_index, data);
 		bit_index += 3;
+		uint8_t nb_of_inputs = exp->max_input_index + 1;
+
+		exp->inputset = malloc(nb_of_inputs * sizeof(struct attribute));
+
 		uint8_t current_input_index = 0;
 		while(nb_of_inputs) {
 
@@ -392,8 +408,13 @@ unpack_task(const uint8_t *data, int bit_index, struct task *task)
 		if(get_bit(bit_index,data)) {
 			bit_index += 1;
 			task->input_existence = 1;
-			uint8_t nb_of_inputs = get_3_bits_from(bit_index, data) + 1;
+
+			task->max_input_index = get_3_bits_from(bit_index, data);
 			bit_index += 3;
+			uint8_t nb_of_inputs = task->max_input_index + 1;
+
+			task->inputset = malloc(nb_of_inputs * sizeof(struct attribute));
+
 			uint8_t current_input_index = 0;
 			while(nb_of_inputs) {
 
@@ -463,11 +484,12 @@ unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 	} else if (attr->type == 4) { //TODO include a length specifier in codification? Is a lot easier in this calculation
 		// type : STRING
 		//	char *string_value;
-		int nb_of_characters = get_3_bits_from(bit_index, data);
+		attr->string_length = get_3_bits_from(bit_index, data);
+		int nb_of_characters = attr->string_length;
 		bit_index += 3;
 		printf("nb_of_characters : %d\n", nb_of_characters);
 
-		memset(attr->string_value, '\0', sizeof(attr->string_value));
+		attr->string_value = malloc(nb_of_characters * sizeof(attr->string_value));//TODO ipv sizeof(char). Eleganter dan hierboven, eigenlijk. Verander nog?
 
 		int char_index;
 		for (char_index = 0 ; char_index < nb_of_characters ; char_index++) {
