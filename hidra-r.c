@@ -12,7 +12,10 @@
 //
 //#include "sys/node-id.h"
 
+#include <stdlib.h>
+
 #include "policy.h"
+#include "subject-associations.h"
 
 // To print the IPv6 addresses in a friendlier way
 #include "debug.h"
@@ -29,8 +32,10 @@ uip_ipaddr_t send_addr;
 
 char HID_CM_IND_SUCCESS = 0;
 char HID_CM_IND_REQ_SUCCESS = 0;
+char HID_S_R_REQ_SUCCESS = 0;
 
-struct policy policy;
+//struct policy policy;
+struct associated_subjects *associated_subjects;
 
 PROCESS(hidra_r,"HidraR");
 AUTOSTART_PROCESSES(&hidra_r);
@@ -52,14 +57,27 @@ handle_hidra_subject_exchanges(struct simple_udp_connection *c,
 	if (HID_CM_IND_REQ_SUCCESS && datalen == first_exchange_len && memcmp(data, first_exchange, first_exchange_len) == 0) {
 		char *response = "HID_S_R_REP";
 		simple_udp_sendto(c, response, strlen(response), sender_addr);
-		HID_CM_IND_REQ_SUCCESS = 0;
+		HID_CM_IND_REQ_SUCCESS = 0; //TODO useless now?
 		HID_CM_IND_SUCCESS = 0;
+		HID_S_R_REQ_SUCCESS = 1;
 		printf("\n");
 		printf("End of Hidra exchange with Subject\n");
 	}
 	else {
 		printf("Did not receive from subject what was expected.");
 	}
+}
+/*---------------------------------------------------------------------------*/
+static void
+handle_subject_access_request(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+        uint16_t datalen)
+{
+	// Search for policy associated with this subject
+	// Search for rule about this action (?)
+	// Check condition + enforce obligation
+	// Respond to subject with status message (Ofwel Success (met response data indien van toepassing), ofwel Access denied)
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -75,51 +93,60 @@ receiver_subject(struct simple_udp_connection *c,
   PRINT6ADDR(sender_addr);
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
-  printf("Data Rx: %*s\n", datalen, data); //datalen specification: because previous messages remain in buffer
-  printf("\n");
 
-  handle_hidra_subject_exchanges(c, sender_addr, data, datalen);
+  if (!HID_S_R_REQ_SUCCESS) {
+	  printf("Data Rx: %.*s\n", datalen, data); //datalen specification: because previous messages remain in buffer
+	  printf("\n");
 
+	  handle_hidra_subject_exchanges(c, sender_addr, data, datalen);
+  } else {
+	  printf("Data Rx: %.*s\n", datalen, data);
+//	  int all = 0;
+//	  for ( ; all < datalen ; all++) {
+//		  print_bits(data[all]);
+//	  }
+//	  printf("\n");
+
+	  handle_subject_access_request(c, sender_addr, data, datalen);
+  }
 }
 /*---------------------------------------------------------------------------*/
 static void
-set_up_hidra_association(struct simple_udp_connection *c,
+set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
         uint16_t datalen)
 {
-	///////////////////////////////////////////////////////////////////////////////////
-	// Test area outside Hidra association establishment: unpack policy into local policy. To be included in the protocol later
 
-//	int i = 0;
-//	for ( ; i < datalen ; i++) {
-//		print_bits(data[i]);
-//	}
-	unpack_policy(data, datalen, &policy);
+	char *second_exchange = "HID_CM_IND_REP";
+	char second_exchange_len = strlen(second_exchange);
 
-	//End of test area
-	///////////////////////////////////////////////////////////////////////////////////
+	// If this is the first exchange with the ACS: extract subject id and policy
+	if (!HID_CM_IND_SUCCESS) {
+		associated_subjects->nb_of_associated_subjects++; //TODO Alleen als subject nog niet tot associatie behoort. Anders is het een update
+		associated_subjects->subject_association_set = malloc(sizeof(struct associated_subject));
 
-//	uint8_t *first_exchange = "HID_CM_IND";
-//	char first_exchange_len = strlen(first_exchange);
-//	uint8_t *second_exchange = "HID_CM_IND_REP";
-//	char second_exchange_len = strlen(second_exchange);
-//
-//	if (datalen == first_exchange_len && memcmp(data, first_exchange, first_exchange_len) == 0) {
-//		uint8_t *response = "HID_CM_IND_REQ";
-//		simple_udp_sendto(c, response, strlen(response), sender_addr);
-//		HID_CM_IND_SUCCESS = 1;
-//	}
-//	else if (HID_CM_IND_SUCCESS
-//			&& datalen == second_exchange_len
-//			&& memcmp(data, second_exchange, second_exchange_len) == 0) {
-//		HID_CM_IND_REQ_SUCCESS = 1;
-//		printf("\n");
-//		printf("End of Hidra exchange with ACS\n");
-//	}
-//	else {
-//		printf("Did not receive from ACS what was expected in the protocol.\n");
-//	}
+		associated_subjects->subject_association_set->id = data[0];
+		int bit_index = 8;
+		printf("associated_subjects->subject_association_set->id : %d\n", associated_subjects->subject_association_set->id);
+
+		unpack_policy(data, bit_index, &associated_subjects->subject_association_set->policy);
+
+
+		char *response = "HID_CM_IND_REQ";
+		simple_udp_sendto(c, response, strlen(response), sender_addr);
+		HID_CM_IND_SUCCESS = 1;
+	}
+	else if (HID_CM_IND_SUCCESS
+			&& datalen == second_exchange_len
+			&& memcmp(data, second_exchange, second_exchange_len) == 0) {
+		HID_CM_IND_REQ_SUCCESS = 1;
+		printf("\n");
+		printf("End of Hidra exchange with ACS\n");
+	}
+	else {
+		printf("Did not receive from ACS what was expected in the protocol.\n");
+	}
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -135,10 +162,10 @@ receiver_acs(struct simple_udp_connection *c,
   PRINT6ADDR(sender_addr);
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
-  printf("Data Rx: %*s\n", datalen, data);
+  printf("Data Rx: %.*s\n", datalen, data);
   printf("\n");
 
-  set_up_hidra_association(c, sender_addr, data, datalen);
+  set_up_hidra_association_with_acs(c, sender_addr, data, datalen);
 
 }
 /*---------------------------------------------------------------------------*/
@@ -183,6 +210,8 @@ PROCESS_THREAD(hidra_r, ev, data)
 	simple_udp_register(&unicast_connection_subject, SUBJECT_UDP_PORT,
 							  NULL, SUBJECT_UDP_PORT,
 							  receiver_subject);
+
+	associated_subjects->nb_of_associated_subjects = 0;
 
 	while(1) {
 		// At the click of the button, a packet will be sent

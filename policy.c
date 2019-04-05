@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+
 #include "policy.h"
 
 
@@ -9,22 +11,31 @@
 // Expression functions table (max nb: 256)
 // Task functions table (max nb: 256)
 // Target resource table (max nb: 256)
+uint8_t
+check_policy(struct policy *policy)
+{
+	return 0;
+}
 
 void
-unpack_policy(const uint8_t *data, uint16_t datalen, struct policy *dest_policy)
+unpack_policy(const uint8_t *data, int bit_index, struct policy *dest_policy)
 {
 //	printf("datalen : %d\n",datalen);
 //	printf("Dus max bit index : %d\n",datalen*8 - 1);
-	int starting_index_next_structure = 0;
+
 	// Unpack policy id and effect and check rule existence mask
-	dest_policy->id = data[0];
-	dest_policy->effect = get_bit(8, data); // to access the first bit
+	dest_policy->id = get_char_from(bit_index, data);
+	bit_index += 8;
+	dest_policy->effect = get_bit(bit_index, data); // to access the first bit
+	bit_index += 1;
 
 	printf("policy.id : %d\n", dest_policy->id);
 	printf("policy.effect : %d\n", dest_policy->effect);
-	if (get_bit(9, data)) { // TODO more efficiency? -> write (data[1] & 0x40) here
+	if (get_bit(bit_index, data)) { // TODO more efficiency? -> write (data[1] & 0x40) here
 		dest_policy->rule_existence = 1;
-		dest_policy->max_rule_index = get_3_bits_from(10, data);
+		bit_index += 1;
+		dest_policy->max_rule_index = get_3_bits_from(bit_index, data);
+		bit_index += 3;
 		uint8_t nb_of_rules = dest_policy->max_rule_index + 1;
 //		printf("nb_of_rules : %d\n",nb_of_rules);
 
@@ -32,14 +43,12 @@ unpack_policy(const uint8_t *data, uint16_t datalen, struct policy *dest_policy)
 		dest_policy->rules = malloc(nb_of_rules * sizeof(struct rule));
 
 		uint8_t current_rule_index = 0;
-		starting_index_next_structure = 13;
 		while(nb_of_rules) {
 
 //			printf("Next rule: \n");
 //			printf("starting_index_next_structure :  %d\n", starting_index_next_structure);
 			// decodify rule and set starting_index_next_structure for the next rule
-			starting_index_next_structure = unpack_rule(data, starting_index_next_structure,
-					&(dest_policy->rules[current_rule_index]));
+			bit_index = unpack_rule(data, bit_index, &(dest_policy->rules[current_rule_index]));
 
 			nb_of_rules--;
 			current_rule_index++;
@@ -283,7 +292,7 @@ unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 		bit_index += 32;
 		// TODO hidra-r.c:456:3: warning: format ‘%f’ expects argument of type ‘double’, but argument 2 has type ‘float’ [-Wformat]
 		// Normaal lukt die cast van float naar double wel?!
-		printf("attr->float_value : %f\n", attr->float_value);
+//		printf("attr->float_value : %f\n", attr->float_value);
 	} else if (attr->type == 4) { //TODO include a length specifier in codification? Is a lot easier in this calculation
 		// type : STRING
 		//	char *string_value;
