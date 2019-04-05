@@ -6,5 +6,7 @@ CFLAGS+= -DUIP_CONF_IPV6_RPL
 
 CONTIKI_WITH_IPV6 = 1
 
+PROJECT_SOURCEFILES += policy.c
+
 CONTIKI = contiki
 include $(CONTIKI)/Makefile.include
