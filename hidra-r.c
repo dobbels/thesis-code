@@ -100,12 +100,12 @@ receiver_subject(struct simple_udp_connection *c,
 
 	  handle_hidra_subject_exchanges(c, sender_addr, data, datalen);
   } else {
-	  printf("Data Rx: %.*s\n", datalen, data);
-//	  int all = 0;
-//	  for ( ; all < datalen ; all++) {
-//		  print_bits(data[all]);
-//	  }
-//	  printf("\n");
+//	  printf("Data Rx: %.*s\n", datalen, data);
+	  int all = 0;
+	  for ( ; all < datalen ; all++) {
+		  print_bits(data[all]);
+	  }
+	  printf("\n");
 
 	  handle_subject_access_request(c, sender_addr, data, datalen);
   }
