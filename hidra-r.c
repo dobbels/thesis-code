@@ -2,7 +2,7 @@
 //#include "lib/random.h"
 //#include "net/ip/uip.h"
 #include "net/ipv6/uip-ds6.h"
-
+#include "dev/leds.h"
 #include "simple-udp.h"
 //
 //#include "net/rpl/rpl.h"
@@ -37,6 +37,9 @@ char HID_S_R_REQ_SUCCESS = 0;
 //struct policy policy;
 struct associated_subjects *associated_subjects;
 
+unsigned char battery_level = 249;
+unsigned char nb_of_access_requests_made = 0;
+
 PROCESS(hidra_r,"HidraR");
 AUTOSTART_PROCESSES(&hidra_r);
 /*---------------------------------------------------------------------------*/
@@ -64,8 +67,55 @@ handle_hidra_subject_exchanges(struct simple_udp_connection *c,
 		printf("End of Hidra exchange with Subject\n");
 	}
 	else {
-		printf("Did not receive from subject what was expected.");
+		printf("Did not receive from subject what was expected.\n");
 	}
+}
+/*---------------------------------------------------------------------------*/
+static void
+send_request_nack(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr)
+{
+	printf("Sending unicast to \n");
+	uip_debug_ipaddr_print(sender_addr);
+	printf("\n");
+
+	const char response = 0;
+	simple_udp_sendto(c, &response, 1, sender_addr);
+}
+/*---------------------------------------------------------------------------*/
+static void
+send_request_ack(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr)
+{
+	printf("Sending unicast to \n");
+	uip_debug_ipaddr_print(sender_addr);
+	printf("\n");
+
+	const char response = 1;
+	simple_udp_sendto(c, &response, 1, sender_addr);
+}
+/*---------------------------------------------------------------------------*/
+static char
+condition_is_met(struct expression condition)
+{
+	if (condition.function == 4) { //TODO look up right expression from table and use corresponding function?
+		printf("Checking battery level.\n");
+		return (battery_level <= 50);
+	}
+	printf("Something is wrong with the given condition.\n");
+	return 0;
+}
+/*---------------------------------------------------------------------------*/
+static void
+perform_task(struct task t)
+{
+	// If function == "++" and system reference is "nb_of_access_requests_made"
+	if (t.function == 9 && t.input_existence == 1 && t.inputset[0].type == 6 && t.inputset[0].char_value == 20) { //TODO look up right expression from table and use corresponding function?
+		nb_of_access_requests_made++;
+		printf("Incrementing the value of nb_of_access_requests_made to %d.\n", nb_of_access_requests_made);
+		return;
+	}
+	printf("Error processing task.\n");
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -74,10 +124,103 @@ handle_subject_access_request(struct simple_udp_connection *c,
 		const uint8_t *data,
         uint16_t datalen)
 {
-	// Search for policy associated with this subject
-	// Search for rule about this action (?)
-	// Check condition + enforce obligation
-	// Respond to subject with status message (Ofwel Success (met response data indien van toepassing), ofwel Access denied)
+	//unpack expected request format
+	unsigned char sub_id = get_char_from(0, data);
+	unsigned char action = get_3_bits_from(8, data);
+	unsigned char type = get_3_bits_from(11, data);
+	unsigned char value = get_char_from(14, data); // This depends on the type in a non-demo scenario
+
+	// print request (if it is the expected demo request)
+	if (action == 2 && type == 6 && value == 18) {
+		printf("Receive a PUT light_switch_on request.\n");
+	} else if (action == 2 && type == 6 && value == 19) {
+		printf("Receive a PUT light_switch_off request.\n");
+	} else {
+		printf("Did not receive the expected demo-request.\n");
+		send_request_nack(c, sender_addr);
+		return;
+	}
+
+	// Search for first policy associated with this subject
+	char exists = 0;
+	struct associated_subject current_sub;
+	int sub_index = 0;
+	for (; sub_index < associated_subjects->nb_of_associated_subjects ; sub_index++) {
+		current_sub = associated_subjects->subject_association_set[sub_index];
+		if (current_sub.id == sub_id) {
+			exists = 1;
+			break;
+		}
+	}
+
+	// For no reason, multiple rules are allowed, but only one condition per rule and one obligation. For demo purposes, even these multiple rules shouldn't be necessary
+	if (exists) {
+		char all_rules_check_out = 1;
+		char result_of_this_rule = 1; // to be able to decide whether to execute an obligation
+		// Search for rule about this action TODO actually any rule without 'action' and with action == ANY should also be checked
+		struct policy current_policy = current_sub.policy;
+		if (current_policy.rule_existence == 0) {
+			all_rules_check_out = current_policy.effect;
+		} else {
+			int rule_index = 0;
+			struct rule current_rule = current_policy.rules[rule_index];
+			for(; rule_index < current_policy.max_rule_index+1 ; rule_index++) {
+				current_rule = current_policy.rules[rule_index];
+				result_of_this_rule = 1;
+
+				if (current_rule.action_mask && current_rule.action == action){
+					//Check condition
+					if (current_rule.effect == 0 && condition_is_met(current_rule.conditionset[0])) {
+						printf("Condition was met, therefore, access is denied.\n");
+						all_rules_check_out = 0;
+						result_of_this_rule = 0;
+					} else if (current_rule.effect == 1 && !condition_is_met(current_rule.conditionset[0])) {
+						printf("Condition was not met, therefore, access is denied.\n");
+						all_rules_check_out = 0;
+						result_of_this_rule = 0;
+					} else {
+						printf("All conditions for this rule: fine.\n");
+					}
+
+					//Enforce obligations
+					if (current_rule.obligationset_mask) {
+						// demo assumption: only one obligation
+						if (current_rule.obligationset[0].fulfill_on == 2 ||
+								current_rule.obligationset[0].fulfill_on == result_of_this_rule) {
+							perform_task(current_rule.obligationset[0].task);
+						}
+					}
+				}
+			}
+		}
+		// (Non)Acknowledge the subject and possibly perform operation
+		if (all_rules_check_out) {
+			if (value == 18) {
+				//turn all leds on
+				leds_on(7);
+			} else if (value == 19) {
+				//turn all leds off
+				leds_off(7);
+			} else {
+				printf("Mistake somehow?\n");
+			}
+			send_request_ack(c, sender_addr);
+
+			// Let's assume this operation requires a lot of battery
+			if (battery_level > 50) {
+				battery_level -= 50;
+				printf("new battery level: %d\n", battery_level);
+			}
+		} else {
+			printf("Request denied, because not all rules check out.\n");
+			send_request_nack(c, sender_addr);
+		}
+
+	} else {
+		// deny if no association with subject exists
+		printf("Request denied, because no association with this subject exists.\n");
+		send_request_nack(c, sender_addr);
+	}
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -94,17 +237,18 @@ receiver_subject(struct simple_udp_connection *c,
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
 
-  if (!HID_S_R_REQ_SUCCESS) {
+  //TODO Dit kan je voor elke subject apart doen als je HID_S_R_REQ_SUCCESS bij zet in de struct
+  if (!HID_S_R_REQ_SUCCESS) { // Complete Hidra Security Association
 	  printf("Data Rx: %.*s\n", datalen, data); //datalen specification: because previous messages remain in buffer
 	  printf("\n");
 
 	  handle_hidra_subject_exchanges(c, sender_addr, data, datalen);
-  } else {
+  } else { // Handle subject request after completion of Hidra protocol
 //	  printf("Data Rx: %.*s\n", datalen, data);
-	  int all = 0;
-	  for ( ; all < datalen ; all++) {
-		  print_bits(data[all]);
-	  }
+//	  int all = 0;
+//	  for ( ; all < datalen ; all++) {
+//		  print_bits(data[all]);
+//	  }
 	  printf("\n");
 
 	  handle_subject_access_request(c, sender_addr, data, datalen);

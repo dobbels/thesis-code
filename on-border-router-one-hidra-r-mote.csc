@@ -117,7 +117,7 @@
       <viewport>6.752432994456341 0.0 0.0 6.752432994456341 -81.30514106956142 -19.80534010787293</viewport>
     </plugin_config>
     <width>400</width>
-    <z>4</z>
+    <z>2</z>
     <height>400</height>
     <location_x>1</location_x>
     <location_y>1</location_y>
@@ -130,7 +130,7 @@
       <coloring />
     </plugin_config>
     <width>1451</width>
-    <z>1</z>
+    <z>3</z>
     <height>240</height>
     <location_x>400</location_x>
     <location_y>160</location_y>
@@ -146,7 +146,7 @@
       <zoomfactor>500.0</zoomfactor>
     </plugin_config>
     <width>1851</width>
-    <z>6</z>
+    <z>7</z>
     <height>166</height>
     <location_x>0</location_x>
     <location_y>696</location_y>
@@ -158,7 +158,7 @@
       <decorations>true</decorations>
     </plugin_config>
     <width>1171</width>
-    <z>5</z>
+    <z>6</z>
     <height>160</height>
     <location_x>680</location_x>
     <location_y>0</location_y>
@@ -171,7 +171,7 @@
       <bound>true</bound>
     </plugin_config>
     <width>362</width>
-    <z>3</z>
+    <z>5</z>
     <height>116</height>
     <location_x>1</location_x>
     <location_y>402</location_y>
@@ -186,10 +186,23 @@
       <analyzers name="6lowpan-pcap" />
     </plugin_config>
     <width>1487</width>
-    <z>2</z>
+    <z>4</z>
     <height>293</height>
     <location_x>363</location_x>
     <location_y>402</location_y>
+  </plugin>
+  <plugin>
+    org.contikios.cooja.plugins.MoteInterfaceViewer
+    <mote_arg>1</mote_arg>
+    <plugin_config>
+      <interface>Leds</interface>
+      <scrollpos>0,0</scrollpos>
+    </plugin_config>
+    <width>350</width>
+    <z>1</z>
+    <height>152</height>
+    <location_x>5</location_x>
+    <location_y>530</location_y>
   </plugin>
 </simconf>
 
