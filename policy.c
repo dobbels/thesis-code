@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "policy.h"
+#include "encoded_policy.h"
 
 
 //TODO To include:
@@ -11,12 +12,6 @@
 // Expression functions table (max nb: 256)
 // Task functions table (max nb: 256)
 // Target resource table (max nb: 256)
-uint8_t
-check_policy(struct policy *policy)
-{
-	return 0;
-}
-
 void
 unpack_policy(const uint8_t *data, int bit_index, struct policy *dest_policy)
 {

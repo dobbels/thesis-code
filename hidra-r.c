@@ -15,6 +15,7 @@
 #include <stdlib.h>
 
 #include "policy.h"
+#include "encoded_policy.h"
 #include "subject-associations.h"
 
 // To print the IPv6 addresses in a friendlier way
@@ -36,6 +37,7 @@ char HID_S_R_REQ_SUCCESS = 0;
 
 //struct policy policy;
 struct associated_subjects *associated_subjects;
+struct associated_subjects_encoded *associated_subjects_encoded;
 
 // For demo purposes
 unsigned char battery_level = 249;
@@ -238,7 +240,8 @@ receiver_subject(struct simple_udp_connection *c,
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
 
-  //TODO Dit kan je voor elke subject apart doen als je HID_S_R_REQ_SUCCESS bij zet in de struct
+  //TODO Dit kan je voor elke subject apart doen als je HID_S_R_REQ_SUCCESS bij zet in de struct.
+  // -> done, nu nog gebruiken (als je nog ooit uitgepakte versie gebruikt)
   if (!HID_S_R_REQ_SUCCESS) { // Complete Hidra Security Association
 	  printf("Data Rx: %.*s\n", datalen, data); //datalen specification: because previous messages remain in buffer
 	  printf("\n");
@@ -257,6 +260,7 @@ receiver_subject(struct simple_udp_connection *c,
 }
 /*---------------------------------------------------------------------------*/
 //TODO delete when prototype is finished (for e.g. ROM measurements)
+//TODO also delete all if (testing_local_policy_size) {..} from policy.c in that case
 static void
 measure_policy_size(const uint8_t *data) {
 	testing_local_policy_size = 1;
@@ -270,6 +274,8 @@ measure_policy_size(const uint8_t *data) {
 	}
 
 	unpack_policy(data, 0, &associated_subjects->subject_association_set->policy);
+
+	printf("Final policy_size_in_bytes: %d\n", policy_size_in_bytes);
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -311,6 +317,60 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 }
 /*---------------------------------------------------------------------------*/
 static void
+set_up_encoded_hidra_association_with_acs(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+        uint16_t datalen,
+        int bit_index)
+{
+
+	char *second_exchange = "HID_CM_IND_REP";
+	char second_exchange_len = strlen(second_exchange);
+
+	// If this is the first exchange with the ACS: extract subject id and policy
+	if (!HID_CM_IND_SUCCESS) {
+		associated_subjects_encoded->nb_of_associated_subjects++; //TODO Alleen als subject nog niet tot associatie behoort. Anders is het een update
+		associated_subjects->subject_association_set = malloc(sizeof(struct associated_subject));
+
+
+		associated_subjects->subject_association_set->id = data[0];
+		printf("associated_subjects->subject_association_set->id : %d\n", associated_subjects->subject_association_set->id);
+
+		unpack_policy(data, bit_index, &associated_subjects->subject_association_set->policy);
+
+
+		char *response = "HID_CM_IND_REQ";
+		simple_udp_sendto(c, response, strlen(response), sender_addr);
+		HID_CM_IND_SUCCESS = 1;
+	}
+	else if (HID_CM_IND_SUCCESS
+			&& datalen == second_exchange_len
+			&& memcmp(data, second_exchange, second_exchange_len) == 0) {
+		HID_CM_IND_REQ_SUCCESS = 1;
+		printf("\n");
+		printf("End of Hidra exchange with ACS\n");
+	}
+	else {
+		printf("Did not receive from ACS what was expected in the protocol.\n");
+	}
+}
+/*---------------------------------------------------------------------------*/
+static void
+handle_policy_update(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+        uint16_t datalen,
+        int bit_index)
+{
+	//Check if policy from this subject is indeed the first one found (PoC during test)
+
+	//Update policy
+
+	//Answer with success message | above on failure : failure message + return
+	send_request_ack(c, sender_addr);
+}
+/*---------------------------------------------------------------------------*/
+static void
 receiver_acs(struct simple_udp_connection *c,
          const uip_ipaddr_t *sender_addr,
          uint16_t sender_port,
@@ -326,28 +386,15 @@ receiver_acs(struct simple_udp_connection *c,
   printf("Data Rx: %.*s\n", datalen, data);
   printf("\n");
 
-  //////////////////
-  //TEST AREA: measure local size of policy instance
-  measure_policy_size(data);
-  printf("policy_size_in_bytes: %d\n", policy_size_in_bytes);
-  //////////////////
-
-  //////////////////
-  //TEST AREA: WILL BE INTEGRATED IN PROTOCOL SOON, WITH DISTINCTION BETWEEN PROTOCOL AND POLICY UPDATE
-
-  //Check if policy from this subject is indeed present
-
-  //Update policy
-
-
-  //Answer with success/failure message
-
-
-  //////////////////
-
-  // Normal functioning of mote
-//  set_up_hidra_association_with_acs(c, sender_addr, data, datalen);
-
+  int bit_index = 1;
+  if (get_bit(0, data) == 0) {
+	  //TODO bit_index = 1 !
+	  set_up_encoded_hidra_association_with_acs(c, sender_addr, data, datalen, bit_index);
+  } else {
+	  //TODO if
+	  //TODO bit_index = 1 !
+	  handle_policy_update(c, sender_addr, data, datalen, bit_index);
+  }
 }
 /*---------------------------------------------------------------------------*/
 static uip_ipaddr_t *
