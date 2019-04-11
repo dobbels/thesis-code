@@ -41,6 +41,9 @@ unpack_policy(const uint8_t *data, int bit_index, struct policy *dest_policy)
 
 		// Allocate the necessary memory in the heap for the specified number of rules
 		dest_policy->rules = malloc(nb_of_rules * sizeof(struct rule));
+		if (testing_local_policy_size) {
+		  policy_size_in_bytes += sizeof(struct rule);
+		}
 
 		uint8_t current_rule_index = 0;
 		while(nb_of_rules) {
@@ -114,6 +117,9 @@ unpack_rule(const uint8_t *data, int bit_index, struct rule *rule)
 	printf("nb_of_expressions : %d\n", nb_of_expressions);
 
 	rule->conditionset = malloc(nb_of_expressions * sizeof(struct expression));
+	if (testing_local_policy_size) {
+	  policy_size_in_bytes += sizeof(struct expression);
+	}
 
 	uint8_t current_expression_index = 0;
 	while(nb_of_expressions) {
@@ -132,6 +138,9 @@ unpack_rule(const uint8_t *data, int bit_index, struct rule *rule)
 		printf("nb_of_obligations : %d\n", nb_of_obligations);
 
 		rule->obligationset = malloc(nb_of_obligations * sizeof(struct obligation));
+		if (testing_local_policy_size) {
+		  policy_size_in_bytes += sizeof(struct obligation);
+		}
 
 		uint8_t current_obligation_index = 0;
 		while(nb_of_obligations) {
@@ -165,6 +174,9 @@ unpack_expression(const uint8_t *data, int bit_index, struct expression *exp)
 		uint8_t nb_of_inputs = exp->max_input_index + 1;
 
 		exp->inputset = malloc(nb_of_inputs * sizeof(struct attribute));
+		if (testing_local_policy_size) {
+		  policy_size_in_bytes += sizeof(struct attribute);
+		}
 
 		uint8_t current_input_index = 0;
 		while(nb_of_inputs) {
@@ -226,6 +238,9 @@ unpack_task(const uint8_t *data, int bit_index, struct task *task)
 			uint8_t nb_of_inputs = task->max_input_index + 1;
 
 			task->inputset = malloc(nb_of_inputs * sizeof(struct attribute));
+			if (testing_local_policy_size) {
+			  policy_size_in_bytes += sizeof(struct attribute);
+			}
 
 			uint8_t current_input_index = 0;
 			while(nb_of_inputs) {
@@ -302,6 +317,9 @@ unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 		printf("nb_of_characters : %d\n", nb_of_characters);
 
 		attr->string_value = malloc(nb_of_characters * sizeof(attr->string_value));//TODO ipv sizeof(char). Eleganter dan hierboven, eigenlijk. Verander nog?
+		if (testing_local_policy_size) {
+		  policy_size_in_bytes += (nb_of_characters * sizeof(attr->string_value));
+		}
 
 		int char_index;
 		for (char_index = 0 ; char_index < nb_of_characters ; char_index++) {

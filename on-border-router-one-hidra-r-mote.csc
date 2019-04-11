@@ -117,7 +117,7 @@
       <viewport>6.752432994456341 0.0 0.0 6.752432994456341 -81.30514106956142 -19.80534010787293</viewport>
     </plugin_config>
     <width>400</width>
-    <z>2</z>
+    <z>3</z>
     <height>400</height>
     <location_x>1</location_x>
     <location_y>1</location_y>
@@ -130,7 +130,7 @@
       <coloring />
     </plugin_config>
     <width>1451</width>
-    <z>3</z>
+    <z>1</z>
     <height>240</height>
     <location_x>400</location_x>
     <location_y>160</location_y>
@@ -199,7 +199,7 @@
       <scrollpos>0,0</scrollpos>
     </plugin_config>
     <width>350</width>
-    <z>1</z>
+    <z>2</z>
     <height>152</height>
     <location_x>5</location_x>
     <location_y>530</location_y>

@@ -37,6 +37,7 @@ char HID_S_R_REQ_SUCCESS = 0;
 //struct policy policy;
 struct associated_subjects *associated_subjects;
 
+// For demo purposes
 unsigned char battery_level = 249;
 unsigned char nb_of_access_requests_made = 0;
 
@@ -255,6 +256,22 @@ receiver_subject(struct simple_udp_connection *c,
   }
 }
 /*---------------------------------------------------------------------------*/
+//TODO delete when prototype is finished (for e.g. ROM measurements)
+static void
+measure_policy_size(const uint8_t *data) {
+	testing_local_policy_size = 1;
+	associated_subjects->nb_of_associated_subjects++; //TODO Alleen als subject nog niet tot associatie behoort. Anders is het een update
+	associated_subjects->subject_association_set = malloc(sizeof(struct associated_subject));
+	if (testing_local_policy_size) {
+	  printf("Test of policy_size_in_bytes before: %d\n", policy_size_in_bytes);
+	  // Subject ID = 8 bits = 1 byte and should not be counted in the policy bytes
+	  policy_size_in_bytes += (sizeof(struct associated_subject) - 1);
+	  printf("And after: %d\n", policy_size_in_bytes);
+	}
+
+	unpack_policy(data, 0, &associated_subjects->subject_association_set->policy);
+}
+/*---------------------------------------------------------------------------*/
 static void
 set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
@@ -309,7 +326,27 @@ receiver_acs(struct simple_udp_connection *c,
   printf("Data Rx: %.*s\n", datalen, data);
   printf("\n");
 
-  set_up_hidra_association_with_acs(c, sender_addr, data, datalen);
+  //////////////////
+  //TEST AREA: measure local size of policy instance
+  measure_policy_size(data);
+  printf("policy_size_in_bytes: %d\n", policy_size_in_bytes);
+  //////////////////
+
+  //////////////////
+  //TEST AREA: WILL BE INTEGRATED IN PROTOCOL SOON, WITH DISTINCTION BETWEEN PROTOCOL AND POLICY UPDATE
+
+  //Check if policy from this subject is indeed present
+
+  //Update policy
+
+
+  //Answer with success/failure message
+
+
+  //////////////////
+
+  // Normal functioning of mote
+//  set_up_hidra_association_with_acs(c, sender_addr, data, datalen);
 
 }
 /*---------------------------------------------------------------------------*/

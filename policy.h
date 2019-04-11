@@ -58,6 +58,10 @@ struct policy {
 	struct rule *rules;
 };
 
+//To calculate size of a policy - both assumed to be initialized to zero
+unsigned int policy_size_in_bytes;
+unsigned char testing_local_policy_size;
+
 //TODO niet meer static, want dan kan je de functies niet in een ander bestand gebruiken
 void unpack_policy(const uint8_t *data, int bit_index, struct policy *dest_policy);
 
