@@ -31,16 +31,17 @@ struct associated_subjects *associated_subjects;
 unsigned char battery_level = 249;
 unsigned char nb_of_access_requests_made = 0;
 
-struct system_reference {
+// For demo purposes, no distinction between different references is made
+struct reference {
 	uint8_t id;
 	void (*function_pointer) (void) ;
 	//TODO could be useful later: void (*pointer)() means: function pointer with unspecified number of argument.
 };
 
-uint8_t max_nb_of_system_references = 10;
-struct system_reference_table {
-	struct system_reference system_references[max_nb_of_system_references];
-} system_reference_table;
+uint8_t max_nb_of_references = 10;
+struct reference_table {
+	struct reference references[max_nb_of_references];
+} reference_table;
 
 static uint8_t
 lowBattery() {
@@ -49,19 +50,19 @@ lowBattery() {
 }
 
 static void
-initialize_system_reference_table()
+initialize_reference_table()
 {
-	system_reference_table.system_references[0].id = 4;
-	system_reference_table.system_references[0].function_pointer = &lowBattery;
+	reference_table.references[0].id = 4;
+	reference_table.references[0].function_pointer = &lowBattery;
 }
 
-static struct system_reference *
-get_system_reference(uint8_t function)
+static struct reference *
+get_reference(uint8_t function)
 {
 	int reference_index = 0;
-	for (; reference_index < max_nb_of_system_references; reference_index++) {
-		if (system_reference_table.system_references[reference_index].id == function) {
-			return &system_reference_table.system_references[reference_index];
+	for (; reference_index < max_nb_of_references; reference_index++) {
+		if (reference_table.references[reference_index].id == function) {
+			return &reference_table.references[reference_index];
 		}
 	}
 	return NULL;
@@ -104,7 +105,7 @@ condition_is_met(uint8_t *policy, int expression_bit_index)
 	if (input_existence_mask) {
 		printf("Did not expect a function with arguments.\n");
 	} else {
-		void (*func_ptr)(void) = get_system_reference(function)->function_pointer;
+		void (*func_ptr)(void) = get_reference(function)->function_pointer;
 		return (*func_ptr)();
 	}
 
@@ -115,13 +116,40 @@ condition_is_met(uint8_t *policy, int expression_bit_index)
 static void
 perform_task(uint8_t *policy, int task_bit_index)
 {
-	// If function == "++" and system reference is "nb_of_access_requests_made"
-	if (t.function == 9 && t.input_existence == 1 && t.inputset[0].type == 6 && t.inputset[0].char_value == 20) { //TODO look up right expression from table and use corresponding function?
-		nb_of_access_requests_made++;
-		printf("Incrementing the value of nb_of_access_requests_made to %d.\n", nb_of_access_requests_made);
+	uint8_t function = get_char_from(task_bit_index, policy);
+	expression_bit_index += 8;
+
+	uint8_t input_existence_mask = get_bit(task_bit_index, policy);
+	task_bit_index += 1;
+	uint8_t max_input_index = get_3_bits_from(task_bit_index, policy);
+	task_bit_index += 3;
+
+	if (input_existence_mask) {
+		if(max_input_index == 0){
+			uint8_t input_type = get_3_bits_from(task_bit_index, policy);
+			task_bit_index += 3;
+			if(input_type == 6) { // type 6 : system reference
+				uint8_t input_value = get_char_from(task_bit_index, policy);
+				task_bit_index += 8;
+				//TODO kan je &(++) doen? Hoe anders pointer naar native function?
+				//TODO in plaats van (*function_pointer) (void), doe je (uint8_t *) en aan lowBattery voeg je dummy toe?
+				if (input_value == 20) {
+					nb_of_access_requests_made++;
+					printf("Incrementing the value of nb_of_access_requests_made to %d.\n", nb_of_access_requests_made);
+				}
+			} else {
+				// Process other types of attributes
+			}
+		} else {
+			// Process function with multiple arguments
+		}
+	} else {
+		void (*func_ptr)(void) = get_reference(function)->function_pointer;
+		(*func_ptr)();
 		return;
 	}
-	printf("Error processing task.\n");
+
+	printf("Error processing task %d.\n", function);
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -547,7 +575,7 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 	associated_subjects->nb_of_associated_subjects = 0;
 
-	initialize_system_reference_table();
+	initialize_reference_table();
 
 	while(1) {
 		// At the click of the button, a packet will be sent
