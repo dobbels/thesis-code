@@ -12,6 +12,25 @@
 // Expression functions table (max nb: 256)
 // Task functions table (max nb: 256)
 // Target resource table (max nb: 256)
+
+//TODO do not compile this file when prototype is finished (for e.g. ROM measurements)
+
+/*---------------------------------------------------------------------------*/
+void
+measure_policy_size(const uint8_t *data) {
+	testing_local_policy_size = 1;
+	policy_size_in_bytes = 0;
+
+	policy_size_in_bytes += sizeof(struct policy);
+	printf("And after: %d\n", policy_size_in_bytes);
+
+	struct policy policy;
+
+	unpack_policy(data, 0, &policy);
+
+	printf("Final policy_size_in_bytes: %d\n", policy_size_in_bytes);
+}
+/*---------------------------------------------------------------------------*/
 void
 unpack_policy(const uint8_t *data, int bit_index, struct policy *dest_policy)
 {

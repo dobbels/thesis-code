@@ -3,7 +3,7 @@
 
 struct associated_subjects {
 	uint8_t nb_of_associated_subjects;
-	struct associated_subject *subject_association_set;
+	struct associated_subject *subject_association_set[10]; //TODO static (temporary) solution, because realloc refuses to work
 };
 
 struct associated_subject {
