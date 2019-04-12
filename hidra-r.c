@@ -14,9 +14,10 @@
 
 #include <stdlib.h>
 
+
+#include "subject-associations.h"
 #include "policy.h"
 #include "encoded_policy.h"
-#include "subject-associations.h"
 
 // To print the IPv6 addresses in a friendlier way
 #include "debug.h"
@@ -36,8 +37,8 @@ char HID_CM_IND_REQ_SUCCESS = 0;
 char HID_S_R_REQ_SUCCESS = 0;
 
 //struct policy policy;
+struct old_associated_subjects *old_associated_subjects;
 struct associated_subjects *associated_subjects;
-struct associated_subjects_encoded *associated_subjects_encoded;
 
 // For demo purposes
 unsigned char battery_level = 249;
@@ -75,7 +76,7 @@ handle_hidra_subject_exchanges(struct simple_udp_connection *c,
 }
 /*---------------------------------------------------------------------------*/
 static void
-send_request_nack(struct simple_udp_connection *c,
+send_nack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr)
 {
 	printf("Sending unicast to \n");
@@ -87,7 +88,7 @@ send_request_nack(struct simple_udp_connection *c,
 }
 /*---------------------------------------------------------------------------*/
 static void
-send_request_ack(struct simple_udp_connection *c,
+send_ack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr)
 {
 	printf("Sending unicast to \n");
@@ -140,16 +141,16 @@ handle_subject_access_request(struct simple_udp_connection *c,
 		printf("Receive a PUT light_switch_off request.\n");
 	} else {
 		printf("Did not receive the expected demo-request.\n");
-		send_request_nack(c, sender_addr);
+		send_nack(c, sender_addr);
 		return;
 	}
 
 	// Search for first policy associated with this subject
 	char exists = 0;
-	struct associated_subject current_sub;
+	struct old_associated_subject current_sub;
 	int sub_index = 0;
-	for (; sub_index < associated_subjects->nb_of_associated_subjects ; sub_index++) {
-		current_sub = associated_subjects->subject_association_set[sub_index];
+	for (; sub_index < old_associated_subjects->nb_of_associated_subjects ; sub_index++) {
+		current_sub = old_associated_subjects->subject_association_set[sub_index];
 		if (current_sub.id == sub_id) {
 			exists = 1;
 			break;
@@ -207,7 +208,7 @@ handle_subject_access_request(struct simple_udp_connection *c,
 			} else {
 				printf("Mistake somehow?\n");
 			}
-			send_request_ack(c, sender_addr);
+			send_ack(c, sender_addr);
 
 			// Let's assume this operation requires a lot of battery
 			if (battery_level > 50) {
@@ -216,13 +217,13 @@ handle_subject_access_request(struct simple_udp_connection *c,
 			}
 		} else {
 			printf("Request denied, because not all rules check out.\n");
-			send_request_nack(c, sender_addr);
+			send_nack(c, sender_addr);
 		}
 
 	} else {
 		// deny if no association with subject exists
 		printf("Request denied, because no association with this subject exists.\n");
-		send_request_nack(c, sender_addr);
+		send_nack(c, sender_addr);
 	}
 }
 /*---------------------------------------------------------------------------*/
@@ -264,22 +265,22 @@ receiver_subject(struct simple_udp_connection *c,
 static void
 measure_policy_size(const uint8_t *data) {
 	testing_local_policy_size = 1;
-	associated_subjects->nb_of_associated_subjects++; //TODO Alleen als subject nog niet tot associatie behoort. Anders is het een update
-	associated_subjects->subject_association_set = malloc(sizeof(struct associated_subject));
+	old_associated_subjects->nb_of_associated_subjects++; //TODO Alleen als subject nog niet tot associatie behoort. Anders is het een update
+	old_associated_subjects->subject_association_set = malloc(sizeof(struct old_associated_subject));
 	if (testing_local_policy_size) {
 	  printf("Test of policy_size_in_bytes before: %d\n", policy_size_in_bytes);
 	  // Subject ID = 8 bits = 1 byte and should not be counted in the policy bytes
-	  policy_size_in_bytes += (sizeof(struct associated_subject) - 1);
+	  policy_size_in_bytes += (sizeof(struct old_associated_subject) - 1);
 	  printf("And after: %d\n", policy_size_in_bytes);
 	}
 
-	unpack_policy(data, 0, &associated_subjects->subject_association_set->policy);
+	unpack_policy(data, 0, &old_associated_subjects->subject_association_set->policy);
 
 	printf("Final policy_size_in_bytes: %d\n", policy_size_in_bytes);
 }
 /*---------------------------------------------------------------------------*/
 static void
-set_up_hidra_association_with_acs(struct simple_udp_connection *c,
+old_set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
         uint16_t datalen)
@@ -290,14 +291,14 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 
 	// If this is the first exchange with the ACS: extract subject id and policy
 	if (!HID_CM_IND_SUCCESS) {
-		associated_subjects->nb_of_associated_subjects++; //TODO Alleen als subject nog niet tot associatie behoort. Anders is het een update
-		associated_subjects->subject_association_set = malloc(sizeof(struct associated_subject));
+		old_associated_subjects->nb_of_associated_subjects++; //TODO Alleen als subject nog niet tot associatie behoort. Anders is het een update
+		old_associated_subjects->subject_association_set = malloc(sizeof(struct old_associated_subject));
 
-		associated_subjects->subject_association_set->id = data[0];
+		old_associated_subjects->subject_association_set->id = data[0];
 		int bit_index = 8;
-		printf("associated_subjects->subject_association_set->id : %d\n", associated_subjects->subject_association_set->id);
+		printf("associated_subjects->subject_association_set->id : %d\n", old_associated_subjects->subject_association_set->id);
 
-		unpack_policy(data, bit_index, &associated_subjects->subject_association_set->policy);
+		unpack_policy(data, bit_index, &old_associated_subjects->subject_association_set->policy);
 
 
 		char *response = "HID_CM_IND_REQ";
@@ -316,37 +317,96 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 	}
 }
 /*---------------------------------------------------------------------------*/
+static uint8_t
+is_already_associated(uint8_t id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+
+	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index].id == id) {
+			result = 1;
+		}
+	}
+
+	return result;
+}
+/*---------------------------------------------------------------------------*/
+static uint8_t
+hid_cm_ind_success(uint8_t id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+
+	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index].id == id &&
+				associated_subjects->subject_association_set[subject_index].hid_cm_ind_success) {
+			result = 1;
+		}
+	}
+
+	return result;
+}
+/*---------------------------------------------------------------------------*/
 static void
-set_up_encoded_hidra_association_with_acs(struct simple_udp_connection *c,
+set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
         uint16_t datalen,
         int bit_index)
 {
-
-	char *second_exchange = "HID_CM_IND_REP";
-	char second_exchange_len = strlen(second_exchange);
+	uint8_t subject_id = get_char_from(bit_index, data);
+	bit_index += 8;
 
 	// If this is the first exchange with the ACS: extract subject id and policy
-	if (!HID_CM_IND_SUCCESS) {
-		associated_subjects_encoded->nb_of_associated_subjects++; //TODO Alleen als subject nog niet tot associatie behoort. Anders is het een update
-		associated_subjects->subject_association_set = malloc(sizeof(struct associated_subject));
+	if (!is_already_associated(subject_id)) {
+		associated_subjects->nb_of_associated_subjects++;
+
+		associated_subjects->subject_association_set = (struct associated_subject *)
+//				realloc(
+//						associated_subjects->subject_association_set,
+				malloc(
+						associated_subjects->nb_of_associated_subjects * sizeof(struct associated_subject) //TODO Warning: this makes the function only suitable for 1 subject
+		);
+		//TODO if (associated_subjects->subject_association_set != NULL) {} else handleAllocError();
 
 
-		associated_subjects->subject_association_set->id = data[0];
-		printf("associated_subjects->subject_association_set->id : %d\n", associated_subjects->subject_association_set->id);
+		associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects-1].id = subject_id;
+		printf("associated_subjects->subject_association_set[%d].id : %d\n", associated_subjects->nb_of_associated_subjects-1, associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects-1].id);
 
-		unpack_policy(data, bit_index, &associated_subjects->subject_association_set->policy);
+		// print policy, for debugging
+//		printf("Policy on arrival: \n");
+//		print_policy(data, bit_index);
 
+		// get policy size in bytes //TODO not efficient. Is there a better way?
+
+
+		// assign policy size //TODO if policy length measure => maybe win 1 byte
+		associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects-1].policy_size = datalen - (bit_index/8);
+		printf("associated_subjects->subject_association_set[%d].policy_size: %d\n", associated_subjects->nb_of_associated_subjects-1, associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects-1].policy_size);
+
+		// malloc policy range with right number of bytes
+		associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects-1].policy =
+				(uint8_t *) malloc(associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects-1].policy_size * sizeof(uint8_t));
+
+		// copy policy to allocated memory
+		copy_policy(data,
+				bit_index,
+				associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects-1].policy_size,
+				associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects-1].policy);
+
+		// print policy, for debugging
+		printf("Policy associated to subject %d : \n", subject_id);
+		print_policy(data, bit_index);
 
 		char *response = "HID_CM_IND_REQ";
 		simple_udp_sendto(c, response, strlen(response), sender_addr);
-		HID_CM_IND_SUCCESS = 1;
+		associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects-1].hid_cm_ind_success = 1;
 	}
-	else if (HID_CM_IND_SUCCESS
-			&& datalen == second_exchange_len
-			&& memcmp(data, second_exchange, second_exchange_len) == 0) {
-		HID_CM_IND_REQ_SUCCESS = 1;
+	else if (hid_cm_ind_success(subject_id)) { //TODO check if content of message checks out
+		HID_CM_IND_REQ_SUCCESS = 1; //TODO set this flag for this subject, before doing request evaluation
 		printf("\n");
 		printf("End of Hidra exchange with ACS\n");
 	}
@@ -362,12 +422,28 @@ handle_policy_update(struct simple_udp_connection *c,
         uint16_t datalen,
         int bit_index)
 {
-	//Check if policy from this subject is indeed the first one found (PoC during test)
+	uint8_t subject_id = get_char_from(bit_index, data);
+	bit_index += 8;
 
-	//Update policy
-
-	//Answer with success message | above on failure : failure message + return
-	send_request_ack(c, sender_addr);
+	printf("Updating policy : \n");
+	//Check if this subject is indeed found
+	if (is_already_associated(subject_id)) {
+		if (get_bits_between(bit_index, bit_index+4, data) == 0) {
+			if (blacklist_subject(associated_subjects, subject_id)) {
+				//Answer with success message
+				send_ack(c, sender_addr);
+			} else {
+				//Answer with failure message
+				send_nack(c, sender_addr);
+			}
+		} else {
+			//Answer with failure message
+			send_nack(c, sender_addr);
+		}
+	} else {
+		//Answer with failure message
+		send_nack(c, sender_addr);
+	}
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -386,13 +462,16 @@ receiver_acs(struct simple_udp_connection *c,
   printf("Data Rx: %.*s\n", datalen, data);
   printf("\n");
 
+//printf("Data Rx: %.*s\n", datalen, data);
+  int all = 0;
+  for ( ; all < datalen ; all++) {
+	  print_bits(data[all]);
+  }
   int bit_index = 1;
   if (get_bit(0, data) == 0) {
-	  //TODO bit_index = 1 !
-	  set_up_encoded_hidra_association_with_acs(c, sender_addr, data, datalen, bit_index);
+	  set_up_hidra_association_with_acs(c, sender_addr, data, datalen, bit_index);
   } else {
-	  //TODO if
-	  //TODO bit_index = 1 !
+	  //TODO check HID_CM_IND_REQ_SUCCESS for this subject
 	  handle_policy_update(c, sender_addr, data, datalen, bit_index);
   }
 }
@@ -439,7 +518,10 @@ PROCESS_THREAD(hidra_r, ev, data)
 							  NULL, SUBJECT_UDP_PORT,
 							  receiver_subject);
 
+	old_associated_subjects->nb_of_associated_subjects = 0;
+
 	associated_subjects->nb_of_associated_subjects = 0;
+	associated_subjects->subject_association_set = NULL;
 
 	while(1) {
 		// At the click of the button, a packet will be sent

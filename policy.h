@@ -58,6 +58,18 @@ struct policy {
 	struct rule *rules;
 };
 
+struct old_associated_subjects {
+	uint8_t nb_of_associated_subjects;
+	struct old_associated_subject *subject_association_set;
+};
+
+struct old_associated_subject {
+	uint8_t id;
+	uint8_t hid_cm_ind_success :1;
+	uint8_t hid_s_r_req_succes :1;
+	struct policy policy;
+};
+
 //To calculate size of a policy - both assumed to be initialized to zero
 unsigned int policy_size_in_bytes;
 unsigned char testing_local_policy_size;
