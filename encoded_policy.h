@@ -17,6 +17,33 @@ struct associated_subject {
 
 uint8_t blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id);
 
+
+uint8_t policy_has_at_least_one_rule(uint8_t *policy);
+
+uint8_t get_policy_effect(uint8_t *policy);
+
+uint8_t rule_get_effect(uint8_t *policy, int bit_index);
+
+uint8_t rule_has_action(uint8_t *policy, int bit_index);
+
+uint8_t rule_has_at_least_one_obligation(uint8_t *policy, int bit_index);
+
+uint8_t rule_get_action(uint8_t *policy, int bit_index);
+
+uint8_t obligation_has_fulfill_on(uint8_t *policy, int bit_index);
+
+uint8_t obligation_get_fulfill_on(uint8_t *policy, int bit_index);
+
+int rule_get_first_exp_index(uint8_t *policy, int bit_index);
+
+int rule_get_first_obl_index(uint8_t *policy, int bit_index);
+
+int expression_increase_index(uint8_t *data, int bit_index);
+
+int task_increase_index(const uint8_t *data, int bit_index);
+
+int attribute_increase_index(const uint8_t *data, int bit_index);
+
 void copy_policy(const uint8_t *data, int bit_index, uint8_t policy_size, uint8_t *destination);
 
 void print_policy(uint8_t *policy, int bit_index);

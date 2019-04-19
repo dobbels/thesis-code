@@ -178,7 +178,7 @@ rule_get_first_obl_index(uint8_t *policy, int bit_index) {
 	//#bits(max_expression_index) = 3
 	bit_index += 3;
 
-	copy = get_3_bits_from(bit_index);
+	copy = get_3_bits_from(bit_index, policy);
 	//Go through all expression
 	uint8_t ind = 0;
 	for(; ind <= copy; ind++) {
@@ -191,7 +191,6 @@ rule_get_first_obl_index(uint8_t *policy, int bit_index) {
 int
 expression_increase_index(uint8_t *data, int bit_index)
 {
-	uint8_t function = get_char_from(bit_index, data);
 	bit_index += 8;
 
 	if(get_bit(bit_index,data)) {
@@ -216,7 +215,6 @@ expression_increase_index(uint8_t *data, int bit_index)
 int
 task_increase_index(const uint8_t *data, int bit_index)
 {
-	uint8_t function = get_char_from(bit_index, data);
 	bit_index += 8;
 
 	if(get_bit(bit_index,data)) {
@@ -245,19 +243,15 @@ attribute_increase_index(const uint8_t *data, int bit_index)
 
 	if (type == 0) {
 		// type : BOOLEAN
-		uint8_t bool_value = get_bit(bit_index, data);
 		bit_index += 1;
 	} else if (type == 1) {
 		// type : BYTE
-		uint8_t char_value = get_char_from(bit_index, data);
 		bit_index += 8;
 	} else if (type == 2) {
 		// type : INTEGER
-		int int_value = get_int16_from(bit_index, data);
 		bit_index += 16;
 	} else if (type == 3) {
 		// type : FLOAT
-		float float_value = get_float_from(bit_index, data);
 		bit_index += 32;
 	} else if (type == 4) {
 		// type : STRING
@@ -267,15 +261,12 @@ attribute_increase_index(const uint8_t *data, int bit_index)
 		bit_index += 3;
 	} else if (type == 5) {
 		// type : REQUEST REFERENCE
-		uint8_t char_value = get_char_from(bit_index, data);
 		bit_index += 8;
 	} else if (type == 6) {
 		// type : SYSTEM REFERENCE
-		uint8_t char_value = get_char_from(bit_index, data);
 		bit_index += 8;
 	} else if (type == 7) {
 		// type : LOCAL REFERENCE
-		uint8_t local_reference_value = get_3_bits_from(bit_index,data);
 		bit_index += 3;
 	} else {
 		printf("Error while unpacking attribute\n");
