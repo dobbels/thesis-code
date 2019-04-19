@@ -34,11 +34,12 @@ unsigned char nb_of_access_requests_made = 0;
 // For demo purposes, no distinction between different references is made
 struct reference {
 	uint8_t id;
-	void (*function_pointer) (void) ;
+	uint8_t (*function_pointer) (void) ;
 	//TODO could be useful later: void (*pointer)() means: function pointer with unspecified number of argument.
 };
 
-uint8_t max_nb_of_references = 10;
+//Space currently reserved for 10 references
+#define max_nb_of_references 10
 struct reference_table {
 	struct reference references[max_nb_of_references];
 } reference_table;
@@ -49,11 +50,36 @@ lowBattery() {
 	return (battery_level <= 50);
 }
 
+static uint8_t
+log_request() {
+	printf("Logging, i.e. incrementing nb_of_access_requests_made.\n");
+	nb_of_access_requests_made++;
+	return (0);
+}
+
+static uint8_t
+switch_light_on() {
+	leds_on(7);
+	return (0);
+}
+
+static uint8_t
+switch_light_off() {
+	leds_off(7);
+	return (0);
+}
+
 static void
 initialize_reference_table()
 {
 	reference_table.references[0].id = 4;
 	reference_table.references[0].function_pointer = &lowBattery;
+	reference_table.references[1].id = 9;
+	reference_table.references[1].function_pointer = &log_request;
+	reference_table.references[2].id = 18;
+	reference_table.references[2].function_pointer = &switch_light_on;
+	reference_table.references[3].id = 19;
+	reference_table.references[3].function_pointer = &switch_light_off;
 }
 
 static struct reference *
@@ -95,7 +121,7 @@ send_ack(struct simple_udp_connection *c,
 	simple_udp_sendto(c, &response, 1, sender_addr);
 }
 /*---------------------------------------------------------------------------*/
-static uint8t
+static uint8_t
 condition_is_met(uint8_t *policy, int expression_bit_index)
 {
 	uint8_t function = get_char_from(expression_bit_index, policy);
@@ -105,7 +131,7 @@ condition_is_met(uint8_t *policy, int expression_bit_index)
 	if (input_existence_mask) {
 		printf("Did not expect a function with arguments.\n");
 	} else {
-		void (*func_ptr)(void) = get_reference(function)->function_pointer;
+		uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
 		return (*func_ptr)();
 	}
 
@@ -117,38 +143,18 @@ static void
 perform_task(uint8_t *policy, int task_bit_index)
 {
 	uint8_t function = get_char_from(task_bit_index, policy);
-	expression_bit_index += 8;
+	task_bit_index += 8;
 
 	uint8_t input_existence_mask = get_bit(task_bit_index, policy);
 	task_bit_index += 1;
-	uint8_t max_input_index = get_3_bits_from(task_bit_index, policy);
-	task_bit_index += 3;
 
 	if (input_existence_mask) {
-		if(max_input_index == 0){
-			uint8_t input_type = get_3_bits_from(task_bit_index, policy);
-			task_bit_index += 3;
-			if(input_type == 6) { // type 6 : system reference
-				uint8_t input_value = get_char_from(task_bit_index, policy);
-				task_bit_index += 8;
-				//TODO kan je &(++) doen? Hoe anders pointer naar native function?
-				//TODO in plaats van (*function_pointer) (void), doe je (uint8_t *) en aan lowBattery voeg je dummy toe?
-				if (input_value == 20) {
-					nb_of_access_requests_made++;
-					printf("Incrementing the value of nb_of_access_requests_made to %d.\n", nb_of_access_requests_made);
-				}
-			} else {
-				// Process other types of attributes
-			}
-		} else {
-			// Process function with multiple arguments
-		}
+		printf("Did not expect a task with arguments.\n");
 	} else {
-		void (*func_ptr)(void) = get_reference(function)->function_pointer;
+		uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
 		(*func_ptr)();
 		return;
 	}
-
 	printf("Error processing task %d.\n", function);
 }
 /*---------------------------------------------------------------------------*/
@@ -160,18 +166,22 @@ handle_subject_access_request(struct simple_udp_connection *c,
         uint8_t sub_id,
         int bit_index)
 {
-	//unpack expected request format
-	unsigned char action = get_3_bits_from(bit_index, data);
+	//Expected demo format: Action: PUT + Task: light_switch_x
+	uint8_t action = get_3_bits_from(bit_index, data);
 	bit_index += 3;
-	unsigned char type = get_3_bits_from(bit_index, data);
+	uint8_t function = get_char_from(bit_index, data);
 	bit_index += 3;
-	unsigned char value = get_char_from(bit_index, data); // This depends on the type in a non-demo scenario
-	bit_index += 3;
+	uint8_t input_existence_mask = get_bit(bit_index, data);
+	bit_index += 1;
+	if (input_existence_mask) {
+		printf("Error: Did not expect a task with arguments.\n");
+	}
+
 
 	// print request (if it is the expected demo request)
-	if (action == 2 && type == 6 && value == 18) {
+	if (action == 2 && function == 18) {
 		printf("Receive a PUT light_switch_on request.\n");
-	} else if (action == 2 && type == 6 && value == 19) {
+	} else if (action == 2 && function == 19) {
 		printf("Receive a PUT light_switch_off request.\n");
 	} else {
 		printf("Did not receive the expected demo-request.\n");
@@ -181,67 +191,67 @@ handle_subject_access_request(struct simple_udp_connection *c,
 
 	// Search for first policy associated with this subject
 	char exists = 0;
-	struct old_associated_subject current_sub;
+	struct associated_subject *current_sub;
 	int sub_index = 0;
-	for (; sub_index < old_associated_subjects->nb_of_associated_subjects ; sub_index++) {
-		current_sub = old_associated_subjects->subject_association_set[sub_index];
-		if (current_sub.id == sub_id) {
+	for (; sub_index < associated_subjects->nb_of_associated_subjects ; sub_index++) {
+		current_sub = &associated_subjects->subject_association_set[sub_index];
+		if (current_sub->id == sub_id) {
 			exists = 1;
 			break;
 		}
 	}
-
-	// For no reason, multiple rules are allowed, but only one condition per rule and one obligation. For demo purposes, even these multiple rules shouldn't be necessary
 	if (exists) {
-		char all_rules_check_out = 1;
-		char result_of_this_rule = 1; // to be able to decide whether to execute an obligation
-		// Search for rule about this action TODO actually any rule without 'action' and with action == ANY should also be checked
-		struct policy current_policy = current_sub.policy;
-		if (current_policy.rule_existence == 0) {
-			all_rules_check_out = current_policy.effect;
+		// Assumption for demo purposes: 1 single rule inside the policy
+		char rule_checks_out = 1;
+
+		// Search for rule about action PUT. TODO include action=ANY and rule without an action specified
+		if (policy_has_at_least_one_rule(current_sub->policy)) {
+			rule_checks_out = get_policy_effect(current_sub->policy);
 		} else {
-			int rule_index = 0;
-			struct rule current_rule = current_policy.rules[rule_index];
-			for(; rule_index < current_policy.max_rule_index+1 ; rule_index++) {
-				current_rule = current_policy.rules[rule_index];
-				result_of_this_rule = 1;
+			// Assumption for demo purposes: 1 single rule inside the policy
 
-				if (current_rule.action_mask && current_rule.action == action){
-					//Check condition
-					if (current_rule.effect == 0 && condition_is_met(current_rule.conditionset[0])) {
-						printf("Condition was met, therefore, access is denied.\n");
-						all_rules_check_out = 0;
-						result_of_this_rule = 0;
-					} else if (current_rule.effect == 1 && !condition_is_met(current_rule.conditionset[0])) {
-						printf("Condition was not met, therefore, access is denied.\n");
-						all_rules_check_out = 0;
-						result_of_this_rule = 0;
-					} else {
-						printf("All conditions for this rule: fine.\n");
-					}
+			//#bits(id) + #bits(effect) + #bits(rule_mask) + #bits(rule_index) = 13
+			int rule_bit_index = 13;
+			if (rule_has_action(current_sub->policy, rule_bit_index)
+					&& rule_get_action(current_sub->policy, rule_bit_index) == action){
+				// Assumption for demo purposes: 1 single expression inside the rule
+				int exp_bit_index = rule_get_first_exp_index(current_sub->policy,rule_bit_index);
+				//Check condition
+				if (rule_get_effect(current_sub->policy) == 0
+						&& condition_is_met(current_sub->policy,exp_bit_index)) {
+					printf("Condition was met, therefore, access is denied.\n");
+					rule_checks_out = 0;
+				} else if (rule_get_effect(current_sub->policy) == 1
+						&& !condition_is_met(current_sub->policy,exp_bit_index)) {
+					printf("Condition was not met, therefore, access is denied.\n");
+					rule_checks_out = 0;
+				} else {
+					printf("All conditions for this rule: fine.\n");
+				}
+				//Enforce obligations
+				if (rule_has_obligations(current_sub->policy, rule_bit_index)) {
 
-					//Enforce obligations
-					if (current_rule.obligationset_mask) {
-						// demo assumption: only one obligation
-						if (current_rule.obligationset[0].fulfill_on == 2 ||
-								current_rule.obligationset[0].fulfill_on == result_of_this_rule) {
-							perform_task(current_rule.obligationset[0].task);
-						}
+					// Assumption for demo purposes: 1 single obligation inside the rule
+					int obl_bit_index = rule_get_first_obl_index(current_sub->policy,rule_bit_index);
+
+					if (!obligation_has_fulfill_on(current_sub->policy, rule_bit_index) ||
+							obligation_get_fulfill_on(current_sub->policy, rule_bit_index)== rule_checks_out) {
+						perform_task(current_sub->policy,obl_bit_index);
+
 					}
 				}
 			}
 		}
+
 		// (Non)Acknowledge the subject and possibly perform operation
-		if (all_rules_check_out) {
-			if (value == 18) {
-				//turn all leds on
-				leds_on(7);
-			} else if (value == 19) {
-				//turn all leds off
-				leds_off(7);
-			} else {
-				printf("Mistake somehow?\n");
-			}
+
+		//TODO als er een obligation is, voer die uit in de juiste gevallen
+
+		if (rule_checks_out) {
+
+			uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
+			(*func_ptr)();
+
 			send_ack(c, sender_addr);
 
 			// Let's assume this operation requires a lot of battery
