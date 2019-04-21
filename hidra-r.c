@@ -319,25 +319,16 @@ handle_subject_access_request(struct simple_udp_connection *c,
 		char rule_checks_out = 0;
 
 //		printf(" : %d\n", );
-//		printf("policy_has_at_least_one_rule(current_sub->policy) : %d\n", policy_has_at_least_one_rule(current_sub->policy));
 		// Search for rule about action PUT. TODO include action=ANY and rule without an action specified
 		if (!policy_has_at_least_one_rule(current_sub->policy)) {
 			rule_checks_out = get_policy_effect(current_sub->policy);
 		} else {
 			// Assumption for demo purposes: 1 single rule inside the policy
-
-			//#bits(id) + #bits(effect) + #bits(rule_mask) + #bits(rule_index) = 13
 			int rule_bit_index = 13;
-//			printf("rule_has_action(current_sub->policy, rule_bit_index) : %d\n", rule_has_action(current_sub->policy, rule_bit_index));
-//			printf("rule_get_action(current_sub->policy, rule_bit_index) : %d\n", rule_get_action(current_sub->policy, rule_bit_index));
 			if (rule_has_action(current_sub->policy, rule_bit_index)
 					&& rule_get_action(current_sub->policy, rule_bit_index) == action){
 				// Assumption for demo purposes: 1 single expression inside the rule
 				int exp_bit_index = rule_get_first_exp_index(current_sub->policy,rule_bit_index);
-//				printf("rule_bit_index : %d\n", rule_bit_index);
-//				printf("rule_get_first_exp_index(current_sub->policy,rule_bit_index) : %d\n", rule_get_first_exp_index(current_sub->policy,rule_bit_index));
-//				printf("rule_get_effect(current_sub->policy, rule_bit_index) : %d\n", rule_get_effect(current_sub->policy, rule_bit_index));
-//				printf("condition_is_met(current_sub->policy,exp_bit_index) : %d\n", condition_is_met(current_sub->policy,exp_bit_index));
 				//Check condition
 				if (rule_get_effect(current_sub->policy, rule_bit_index) == 0
 						&& !condition_is_met(current_sub->policy,exp_bit_index)) {
@@ -354,10 +345,7 @@ handle_subject_access_request(struct simple_udp_connection *c,
 				if (rule_has_at_least_one_obligation(current_sub->policy, rule_bit_index)) {
 
 					// Assumption for demo purposes: 1 single obligation inside the rule
-//					print_rule(current_sub->policy,rule_bit_index);
 					int obl_bit_index = rule_get_first_obl_index(current_sub->policy,rule_bit_index);
-//					printf("rule_bit_index : %d\n", rule_bit_index);
-//					printf("obl_bit_index : %d\n", obl_bit_index);
 
 //					printf("obligation_has_fulfill_on(current_sub->policy, obl_bit_index) : %d\n", obligation_has_fulfill_on(current_sub->policy, obl_bit_index));
 					//Always execute task || Obligation has fulfill_on
