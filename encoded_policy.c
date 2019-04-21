@@ -4,7 +4,6 @@
 #include "policy.h"
 #include "encoded_policy.h"
 
-
 /*
  * Change policy related to subject with general DENY.
  * If no associated subject exists with subject_id, return failure = 0

@@ -97,7 +97,7 @@ get_reference(uint8_t function)
 static uint8_t
 execute(uint8_t function)
 {
-	printf("Printing function %d\n", function);
+//	printf("Printing function %d\n", function);
 	uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
 	if (*func_ptr == NULL) {
 		printf("Something went wrong executing a function pointer.\n");
@@ -294,9 +294,9 @@ handle_subject_access_request(struct simple_udp_connection *c,
 
 	// print request (if it is the expected demo request)
 	if (action == 2 && function == 18) {
-		printf("Receive a PUT light_switch_on request.\n");
+		printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
 	} else if (action == 2 && function == 19) {
-		printf("Receive a PUT light_switch_off request.\n");
+		printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
 	} else {
 		printf("Did not receive the expected demo-request.\n");
 		send_nack(c, sender_addr);
@@ -330,12 +330,11 @@ handle_subject_access_request(struct simple_udp_connection *c,
 				// Assumption for demo purposes: 1 single expression inside the rule
 				int exp_bit_index = rule_get_first_exp_index(current_sub->policy,rule_bit_index);
 				//Check condition
-				if (rule_get_effect(current_sub->policy, rule_bit_index) == 0
-						&& !condition_is_met(current_sub->policy,exp_bit_index)) {
+				uint8_t condition_is_met = condition_is_met(current_sub->policy,exp_bit_index);
+				if (!condition_is_met && rule_get_effect(current_sub->policy, rule_bit_index) == 0) {
 					printf("Condition was met, therefore access is granted.\n");
 					rule_checks_out = 1;
-				} else if (rule_get_effect(current_sub->policy, rule_bit_index) == 1
-						&& condition_is_met(current_sub->policy,exp_bit_index)) {
+				} else if (condition_is_met && rule_get_effect(current_sub->policy, rule_bit_index) == 1) {
 					printf("Condition was not met, therefore access is granted.\n");
 					rule_checks_out = 1;
 				} else {
@@ -347,7 +346,6 @@ handle_subject_access_request(struct simple_udp_connection *c,
 					// Assumption for demo purposes: 1 single obligation inside the rule
 					int obl_bit_index = rule_get_first_obl_index(current_sub->policy,rule_bit_index);
 
-//					printf("obligation_has_fulfill_on(current_sub->policy, obl_bit_index) : %d\n", obligation_has_fulfill_on(current_sub->policy, obl_bit_index));
 					//Always execute task || Obligation has fulfill_on
 					if (!obligation_has_fulfill_on(current_sub->policy, obl_bit_index)) {
 						perform_task(current_sub->policy,obl_bit_index);
@@ -360,10 +358,7 @@ handle_subject_access_request(struct simple_udp_connection *c,
 			}
 		}
 
-		// (Non)Acknowledge the subject and possibly perform operation
-
-		//TODO als er een obligation is, voer die uit in de juiste gevallen
-
+		// Possibly perform operation and (non)acknowledge the subject
 		if (rule_checks_out) {
 
 			execute(function);
@@ -419,7 +414,7 @@ receiver_subject(struct simple_udp_connection *c,
   PRINT6ADDR(sender_addr);
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
-  printf("Data Rx: %.*s\n", datalen, data);
+//  printf("Data Rx: %.*s\n", datalen, data);
 
   int bit_index = 1;
   uint8_t subject_id = get_char_from(bit_index, data);
@@ -540,7 +535,7 @@ receiver_acs(struct simple_udp_connection *c,
   PRINT6ADDR(sender_addr);
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
-  printf("Data Rx: %.*s\n", datalen, data);
+//  printf("Data Rx: %.*s\n", datalen, data);
   printf("\n");
 
   int bit_index = 1;
