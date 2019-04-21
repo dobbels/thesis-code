@@ -4,6 +4,7 @@
 #include "policy.h"
 #include "encoded_policy.h"
 
+
 /*
  * Change policy related to subject with general DENY.
  * If no associated subject exists with subject_id, return failure = 0
@@ -86,11 +87,13 @@ rule_has_at_least_one_obligation(uint8_t *policy, int bit_index) {
 uint8_t
 rule_get_action(uint8_t *policy, int bit_index) {
 	//#bits(id) +
-	//#bits(effect) +
-	//#bits(5 masks) +
-	//= 14
-	bit_index += 14;
+	//#bits(effect)
+	//= 9
+	bit_index += 9;
 	int copy = bit_index;
+
+	//#bits(5 masks)
+	bit_index += 5;
 
 	if (get_bit(copy++, policy)) {
 		bit_index += 8;
@@ -124,11 +127,13 @@ obligation_get_fulfill_on(uint8_t *policy, int bit_index) {
 int
 rule_get_first_exp_index(uint8_t *policy, int bit_index) {
 	//#bits(id) +
-	//#bits(effect) +
-	//#bits(5 masks) +
-	//= 14
-	bit_index += 14;
+	//#bits(effect)
+	//= 9
+	bit_index += 9;
 	int copy = bit_index;
+
+	//#bits(5 masks)
+	bit_index += 5;
 
 	if (get_bit(copy++, policy)) {
 		bit_index += 8;
@@ -143,7 +148,7 @@ rule_get_first_exp_index(uint8_t *policy, int bit_index) {
 	}
 
 	if (get_bit(copy, policy)) {
-		bit_index += 8;
+		bit_index += 3;
 	}
 	//#bits(max_expression_index) = 3
 	bit_index += 3;
@@ -154,11 +159,13 @@ rule_get_first_exp_index(uint8_t *policy, int bit_index) {
 int
 rule_get_first_obl_index(uint8_t *policy, int bit_index) {
 	//#bits(id) +
-	//#bits(effect) +
-	//#bits(5 masks) +
-	//= 14
-	bit_index += 14;
+	//#bits(effect)
+	//= 9
+	bit_index += 9;
 	int copy = bit_index;
+
+	//#bits(5 masks)
+	bit_index += 5;
 
 	if (get_bit(copy++, policy)) {
 		bit_index += 8;
@@ -173,25 +180,30 @@ rule_get_first_obl_index(uint8_t *policy, int bit_index) {
 	}
 
 	if (get_bit(copy, policy)) {
-		bit_index += 8;
+		bit_index += 3;
 	}
+
+	uint8_t nb_exp = get_3_bits_from(bit_index, policy) + 1;
+
 	//#bits(max_expression_index) = 3
 	bit_index += 3;
 
-	copy = get_3_bits_from(bit_index, policy);
 	//Go through all expression
 	uint8_t ind = 0;
-	for(; ind <= copy; ind++) {
+	while(nb_exp) {
+		print_expression(policy, bit_index);
 		bit_index = expression_increase_index(policy, bit_index);
+		nb_exp--;
 	}
-
 	return (bit_index);
 }
 
 int
 expression_increase_index(uint8_t *data, int bit_index)
 {
+	//Function id = 8
 	bit_index += 8;
+
 
 	if(get_bit(bit_index,data)) {
 		bit_index += 1;
@@ -417,19 +429,14 @@ print_obligation(const uint8_t *data, int bit_index)
 {
 	bit_index = print_task(data, bit_index);
 
-	uint8_t fulfill_on = 0;
+	printf("obl->fulfill_on_existence_mask : %d\n", get_bit(bit_index, data));
 	if (get_bit(bit_index, data)) {
 		bit_index += 1;
-		fulfill_on = get_bit(bit_index, data);
+		printf("obl->fulfill_on_existence_mask : %d\n", get_bit(bit_index, data));
 		bit_index += 1;
 	} else {
 		bit_index += 1;
-		// Always execute task
-		fulfill_on = 2;
 	}
-
-	printf("\n");
-	printf("obl->fulfill_on : %d\n", fulfill_on);
 	return bit_index;
 }
 /*---------------------------------------------------------------------------*/

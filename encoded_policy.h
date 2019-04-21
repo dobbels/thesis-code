@@ -3,7 +3,8 @@
 
 struct associated_subjects {
 	uint8_t nb_of_associated_subjects;
-	struct associated_subject *subject_association_set[10]; //TODO static (temporary) solution, because realloc refuses to work
+	//static array, because realloc doesn't work
+	struct associated_subject *subject_association_set[10]; //TODO lower to number of demo policies
 };
 
 struct associated_subject {
@@ -16,7 +17,6 @@ struct associated_subject {
 };
 
 uint8_t blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id);
-
 
 uint8_t policy_has_at_least_one_rule(uint8_t *policy);
 

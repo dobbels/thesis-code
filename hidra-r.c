@@ -45,7 +45,7 @@ struct reference_table {
 } reference_table;
 
 static uint8_t
-lowBattery() {
+low_battery() {
 	printf("Checking battery level.\n");
 	return (battery_level <= 50);
 }
@@ -73,7 +73,7 @@ static void
 initialize_reference_table()
 {
 	reference_table.references[0].id = 4;
-	reference_table.references[0].function_pointer = &lowBattery;
+	reference_table.references[0].function_pointer = &low_battery;
 	reference_table.references[1].id = 9;
 	reference_table.references[1].function_pointer = &log_request;
 	reference_table.references[2].id = 18;
@@ -92,6 +92,19 @@ get_reference(uint8_t function)
 		}
 	}
 	return NULL;
+}
+
+static uint8_t
+execute(uint8_t function)
+{
+	printf("Printing function %d\n", function);
+	uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
+	if (*func_ptr == NULL) {
+		printf("Something went wrong executing a function pointer.\n");
+		return 0;
+	} else {
+		return (*func_ptr)();
+	}
 }
 
 PROCESS(hidra_r,"HidraR");
@@ -122,210 +135,6 @@ send_ack(struct simple_udp_connection *c,
 }
 /*---------------------------------------------------------------------------*/
 static uint8_t
-condition_is_met(uint8_t *policy, int expression_bit_index)
-{
-	uint8_t function = get_char_from(expression_bit_index, policy);
-	expression_bit_index += 8;
-
-	uint8_t input_existence_mask = get_bit(expression_bit_index, policy);
-	if (input_existence_mask) {
-		printf("Did not expect a function with arguments.\n");
-	} else {
-		uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
-		return (*func_ptr)();
-	}
-
-	printf("Something went wrong with condition %d.\n", function);
-	return 0;
-}
-/*---------------------------------------------------------------------------*/
-static void
-perform_task(uint8_t *policy, int task_bit_index)
-{
-	uint8_t function = get_char_from(task_bit_index, policy);
-	task_bit_index += 8;
-
-	uint8_t input_existence_mask = get_bit(task_bit_index, policy);
-	task_bit_index += 1;
-
-	if (input_existence_mask) {
-		printf("Did not expect a task with arguments.\n");
-	} else {
-		uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
-		(*func_ptr)();
-		return;
-	}
-	printf("Error processing task %d.\n", function);
-}
-/*---------------------------------------------------------------------------*/
-static void
-handle_subject_access_request(struct simple_udp_connection *c,
-		const uip_ipaddr_t *sender_addr,
-		const uint8_t *data,
-        uint16_t datalen,
-        uint8_t sub_id,
-        int bit_index)
-{
-	//Expected demo format: Action: PUT + Task: light_switch_x
-	uint8_t action = get_3_bits_from(bit_index, data);
-	bit_index += 3;
-	uint8_t function = get_char_from(bit_index, data);
-	bit_index += 3;
-	uint8_t input_existence_mask = get_bit(bit_index, data);
-	bit_index += 1;
-	if (input_existence_mask) {
-		printf("Error: Did not expect a task with arguments.\n");
-	}
-
-
-	// print request (if it is the expected demo request)
-	if (action == 2 && function == 18) {
-		printf("Receive a PUT light_switch_on request.\n");
-	} else if (action == 2 && function == 19) {
-		printf("Receive a PUT light_switch_off request.\n");
-	} else {
-		printf("Did not receive the expected demo-request.\n");
-		send_nack(c, sender_addr);
-		return;
-	}
-
-	// Search for first policy associated with this subject
-	char exists = 0;
-	struct associated_subject *current_sub;
-	int sub_index = 0;
-	for (; sub_index < associated_subjects->nb_of_associated_subjects ; sub_index++) {
-		current_sub = &associated_subjects->subject_association_set[sub_index];
-		if (current_sub->id == sub_id) {
-			exists = 1;
-			break;
-		}
-	}
-	if (exists) {
-		// Assumption for demo purposes: 1 single rule inside the policy
-		char rule_checks_out = 1;
-
-		// Search for rule about action PUT. TODO include action=ANY and rule without an action specified
-		if (policy_has_at_least_one_rule(current_sub->policy)) {
-			rule_checks_out = get_policy_effect(current_sub->policy);
-		} else {
-			// Assumption for demo purposes: 1 single rule inside the policy
-
-			//#bits(id) + #bits(effect) + #bits(rule_mask) + #bits(rule_index) = 13
-			int rule_bit_index = 13;
-			if (rule_has_action(current_sub->policy, rule_bit_index)
-					&& rule_get_action(current_sub->policy, rule_bit_index) == action){
-				// Assumption for demo purposes: 1 single expression inside the rule
-				int exp_bit_index = rule_get_first_exp_index(current_sub->policy,rule_bit_index);
-				//Check condition
-				if (rule_get_effect(current_sub->policy) == 0
-						&& condition_is_met(current_sub->policy,exp_bit_index)) {
-					printf("Condition was met, therefore, access is denied.\n");
-					rule_checks_out = 0;
-				} else if (rule_get_effect(current_sub->policy) == 1
-						&& !condition_is_met(current_sub->policy,exp_bit_index)) {
-					printf("Condition was not met, therefore, access is denied.\n");
-					rule_checks_out = 0;
-				} else {
-					printf("All conditions for this rule: fine.\n");
-				}
-				//Enforce obligations
-				if (rule_has_obligations(current_sub->policy, rule_bit_index)) {
-
-					// Assumption for demo purposes: 1 single obligation inside the rule
-					int obl_bit_index = rule_get_first_obl_index(current_sub->policy,rule_bit_index);
-
-					if (!obligation_has_fulfill_on(current_sub->policy, rule_bit_index) ||
-							obligation_get_fulfill_on(current_sub->policy, rule_bit_index)== rule_checks_out) {
-						perform_task(current_sub->policy,obl_bit_index);
-
-					}
-				}
-			}
-		}
-
-		// (Non)Acknowledge the subject and possibly perform operation
-
-		//TODO als er een obligation is, voer die uit in de juiste gevallen
-
-		if (rule_checks_out) {
-
-			uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
-			(*func_ptr)();
-
-			send_ack(c, sender_addr);
-
-			// Let's assume this operation requires a lot of battery
-			if (battery_level > 50) {
-				battery_level -= 50;
-				printf("new battery level: %d\n", battery_level);
-			}
-		} else {
-			printf("Request denied, because not all rules check out.\n");
-			send_nack(c, sender_addr);
-		}
-
-	} else {
-		// deny if no association with subject exists
-		printf("Request denied, because no association with this subject exists.\n");
-		send_nack(c, sender_addr);
-	}
-}
-/*---------------------------------------------------------------------------*/
-static void
-handle_hidra_subject_exchanges(struct simple_udp_connection *c,
-		const uip_ipaddr_t *sender_addr,
-		const uint8_t *data,
-        uint16_t datalen,
-        uint8_t subject_id)
-{
-
-	if (hid_cm_ind_req_success(subject_id)) {
-		char *response = "HID_S_R_REP";
-		simple_udp_sendto(c, response, strlen(response), sender_addr);
-		set_hid_s_r_req_success(subject_id, 1);
-		printf("End of Hidra exchange with Subject\n");
-		printf("\n");
-	}
-	else {
-		printf("Did not receive from subject what was expected.\n");
-	}
-}
-/*---------------------------------------------------------------------------*/
-static void
-receiver_subject(struct simple_udp_connection *c,
-         const uip_ipaddr_t *sender_addr,
-         uint16_t sender_port,
-         const uip_ipaddr_t *receiver_addr,
-         uint16_t receiver_port,
-         const uint8_t *data,
-         uint16_t datalen)
-{
-  printf("\nData received from: ");
-  PRINT6ADDR(sender_addr);
-  printf("\nAt port %d from port %d with length %d\n",
-		  receiver_port, sender_port, datalen);
-  printf("Data Rx: %.*s\n", datalen, data);
-
-  int bit_index = 1;
-  uint8_t subject_id = get_char_from(bit_index, data);
-  bit_index += 8;
-  if (get_bit(0, data)) { //Hidra protocol message
-	  if (is_already_assocation(subject_id) && !hid_s_r_req_success(subject_id)) {
-		  handle_hidra_subject_exchanges(c, sender_addr, data, datalen, subject_id);
-	  } else {
-		  printf("Hidra protocol message from subject without proper preceding steps.\n");
-	  }
-  } else { //Access request
-	  if (is_already_assocation(subject_id) && hid_s_r_req_success(subject_id)) { //TODO dubbel redundant, want hid_s_r_req_success omvat is_already_assocation en in handle_subject_access_request wordt nog eens (impliciet) gecheckt of subject associated is
-		  handle_subject_access_request(c, sender_addr, data, datalen, subject_id, bit_index);
-	  } else {
-		  printf("Request denied, because no association with this subject exists.\n");
-		  send_nack(c, sender_addr);
-	  }
-  }
-}
-/*---------------------------------------------------------------------------*/
-static uint8_t
 is_already_associated(uint8_t id)
 {
 	uint8_t result = 0;
@@ -341,16 +150,16 @@ is_already_associated(uint8_t id)
 	return result;
 }
 /*---------------------------------------------------------------------------*/
-static void
-set_hid_cm_ind_success(uint8_t id, uint8_t bit)
-{
-	int subject_index = 0;
-	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
-		if(associated_subjects->subject_association_set[subject_index]->id == id) {
-			associated_subjects->subject_association_set[subject_index]->hid_cm_ind_success = bit;
-		}
-	}
-}
+//static void
+//set_hid_cm_ind_success(uint8_t id, uint8_t bit)
+//{
+//	int subject_index = 0;
+//	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+//		if(associated_subjects->subject_association_set[subject_index]->id == id) {
+//			associated_subjects->subject_association_set[subject_index]->hid_cm_ind_success = bit;
+//		}
+//	}
+//}
 /*---------------------------------------------------------------------------*/
 static uint8_t
 hid_cm_ind_success(uint8_t id)
@@ -402,29 +211,245 @@ hid_s_r_req_success(uint8_t id)
 }
 /*---------------------------------------------------------------------------*/
 static void
-set_hid_cm_ind_req_succes(uint8_t subject_id, uint8_t bit)
+set_hid_cm_ind_req_success(uint8_t subject_id, uint8_t bit)
 {
 	int subject_index = 0;
 	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
-		if(associated_subjects->subject_association_set[subject_index]->id == id) {
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id) {
 			associated_subjects->subject_association_set[subject_index]->hid_cm_ind_req_success = bit;
 		}
 	}
 }
 /*---------------------------------------------------------------------------*/
 static uint8_t
-hid_cm_ind_req_succes(uint8_t subject_id)
+hid_cm_ind_req_success(uint8_t subject_id)
 {
 	uint8_t result = 0;
 
 	int subject_index = 0;
 	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
-		if(associated_subjects->subject_association_set[subject_index]->id == id &&
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id &&
 				associated_subjects->subject_association_set[subject_index]->hid_cm_ind_req_success) {
 			result = 1;
 		}
 	}
 	return result;
+}
+/*---------------------------------------------------------------------------*/
+static uint8_t
+condition_is_met(uint8_t *policy, int expression_bit_index)
+{
+	uint8_t function = get_char_from(expression_bit_index, policy);
+	expression_bit_index += 8;
+
+	uint8_t input_existence_mask = get_bit(expression_bit_index, policy);
+	if (input_existence_mask) {
+		printf("(function: condition_is_met) Did not expect a function with arguments.\n");
+	} else {
+		return execute(function);
+	}
+
+	printf("Something went wrong with condition %d.\n", function);
+	return 0;
+}
+/*---------------------------------------------------------------------------*/
+static void
+perform_task(uint8_t *policy, int task_bit_index)
+{
+	uint8_t function = get_char_from(task_bit_index, policy);
+	task_bit_index += 8;
+
+	uint8_t input_existence_mask = get_bit(task_bit_index, policy);
+	task_bit_index += 1;
+
+	if (input_existence_mask) {
+		printf("(function: perform_task) Did not expect a task with arguments.\n");
+	} else {
+		execute(function);
+		return;
+	}
+	printf("Error processing task %d.\n", function);
+}
+/*---------------------------------------------------------------------------*/
+static void
+handle_subject_access_request(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+        uint16_t datalen,
+        uint8_t sub_id,
+        int bit_index)
+{
+
+	//Expected demo format: Action: PUT + Task: light_switch_x
+	uint8_t action = get_3_bits_from(bit_index, data);
+	bit_index += 3;
+	uint8_t function = get_char_from(bit_index, data);
+	bit_index += 8;
+	uint8_t input_existence_mask = get_bit(bit_index, data);
+	bit_index += 1;
+	if (input_existence_mask) {
+		printf("Error: Did not expect a task with arguments.\n");
+	}
+
+
+	// print request (if it is the expected demo request)
+	if (action == 2 && function == 18) {
+		printf("Receive a PUT light_switch_on request.\n");
+	} else if (action == 2 && function == 19) {
+		printf("Receive a PUT light_switch_off request.\n");
+	} else {
+		printf("Did not receive the expected demo-request.\n");
+		send_nack(c, sender_addr);
+		return;
+	}
+
+	// Search for first policy associated with this subject
+	char exists = 0;
+	struct associated_subject *current_sub;
+	int sub_index = 0;
+	for (; sub_index < associated_subjects->nb_of_associated_subjects ; sub_index++) {
+		current_sub = associated_subjects->subject_association_set[sub_index];
+		if (current_sub->id == sub_id) {
+			exists = 1;
+			break;
+		}
+	}
+	if (exists) {
+		// Assumption for demo purposes: 1 single rule inside the policy
+		char rule_checks_out = 0;
+
+//		printf(" : %d\n", );
+//		printf("policy_has_at_least_one_rule(current_sub->policy) : %d\n", policy_has_at_least_one_rule(current_sub->policy));
+		// Search for rule about action PUT. TODO include action=ANY and rule without an action specified
+		if (!policy_has_at_least_one_rule(current_sub->policy)) {
+			rule_checks_out = get_policy_effect(current_sub->policy);
+		} else {
+			// Assumption for demo purposes: 1 single rule inside the policy
+
+			//#bits(id) + #bits(effect) + #bits(rule_mask) + #bits(rule_index) = 13
+			int rule_bit_index = 13;
+//			printf("rule_has_action(current_sub->policy, rule_bit_index) : %d\n", rule_has_action(current_sub->policy, rule_bit_index));
+//			printf("rule_get_action(current_sub->policy, rule_bit_index) : %d\n", rule_get_action(current_sub->policy, rule_bit_index));
+			if (rule_has_action(current_sub->policy, rule_bit_index)
+					&& rule_get_action(current_sub->policy, rule_bit_index) == action){
+				// Assumption for demo purposes: 1 single expression inside the rule
+				int exp_bit_index = rule_get_first_exp_index(current_sub->policy,rule_bit_index);
+//				printf("rule_bit_index : %d\n", rule_bit_index);
+//				printf("rule_get_first_exp_index(current_sub->policy,rule_bit_index) : %d\n", rule_get_first_exp_index(current_sub->policy,rule_bit_index));
+//				printf("rule_get_effect(current_sub->policy, rule_bit_index) : %d\n", rule_get_effect(current_sub->policy, rule_bit_index));
+//				printf("condition_is_met(current_sub->policy,exp_bit_index) : %d\n", condition_is_met(current_sub->policy,exp_bit_index));
+				//Check condition
+				if (rule_get_effect(current_sub->policy, rule_bit_index) == 0
+						&& !condition_is_met(current_sub->policy,exp_bit_index)) {
+					printf("Condition was met, therefore access is granted.\n");
+					rule_checks_out = 1;
+				} else if (rule_get_effect(current_sub->policy, rule_bit_index) == 1
+						&& condition_is_met(current_sub->policy,exp_bit_index)) {
+					printf("Condition was not met, therefore access is granted.\n");
+					rule_checks_out = 1;
+				} else {
+					printf("Rule effect is %d, while condition result was %d => Access denied.\n", rule_get_effect(current_sub->policy, rule_bit_index), condition_is_met(current_sub->policy,exp_bit_index));
+				}
+				//Enforce obligations
+				if (rule_has_at_least_one_obligation(current_sub->policy, rule_bit_index)) {
+
+					// Assumption for demo purposes: 1 single obligation inside the rule
+//					print_rule(current_sub->policy,rule_bit_index);
+					int obl_bit_index = rule_get_first_obl_index(current_sub->policy,rule_bit_index);
+//					printf("rule_bit_index : %d\n", rule_bit_index);
+//					printf("obl_bit_index : %d\n", obl_bit_index);
+
+//					printf("obligation_has_fulfill_on(current_sub->policy, obl_bit_index) : %d\n", obligation_has_fulfill_on(current_sub->policy, obl_bit_index));
+					//Always execute task || Obligation has fulfill_on
+					if (!obligation_has_fulfill_on(current_sub->policy, obl_bit_index)) {
+						perform_task(current_sub->policy,obl_bit_index);
+					}
+					//Check if existing fulfill_on matches rule outcome
+					else if (obligation_get_fulfill_on(current_sub->policy, obl_bit_index) == rule_checks_out) {
+						perform_task(current_sub->policy,obl_bit_index);
+					}
+				}
+			}
+		}
+
+		// (Non)Acknowledge the subject and possibly perform operation
+
+		//TODO als er een obligation is, voer die uit in de juiste gevallen
+
+		if (rule_checks_out) {
+
+			execute(function);
+
+			send_ack(c, sender_addr);
+
+			// Let's assume this operation requires a lot of battery
+			if (battery_level > 50) {
+				battery_level -= 50;
+				printf("new battery level: %d\n", battery_level);
+			}
+		} else {
+			printf("Request denied, because not all rules check out.\n");
+			send_nack(c, sender_addr);
+		}
+
+	} else {
+		// deny if no association with subject exists
+		printf("Request denied, because no association with this subject exists.\n");
+		send_nack(c, sender_addr);
+	}
+}
+/*---------------------------------------------------------------------------*/
+static void
+handle_hidra_subject_exchanges(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+        uint16_t datalen,
+        uint8_t subject_id)
+{
+	if (hid_cm_ind_req_success(subject_id)) {
+		char *response = "HID_S_R_REP";
+		simple_udp_sendto(c, response, strlen(response), sender_addr);
+		set_hid_s_r_req_success(subject_id, 1);
+		printf("End of Hidra exchange with Subject\n");
+		printf("\n");
+	}
+	else {
+		printf("Did not receive from subject what was expected.\n");
+	}
+}
+/*---------------------------------------------------------------------------*/
+static void
+receiver_subject(struct simple_udp_connection *c,
+         const uip_ipaddr_t *sender_addr,
+         uint16_t sender_port,
+         const uip_ipaddr_t *receiver_addr,
+         uint16_t receiver_port,
+         const uint8_t *data,
+         uint16_t datalen)
+{
+  printf("\nData received from: ");
+  PRINT6ADDR(sender_addr);
+  printf("\nAt port %d from port %d with length %d\n",
+		  receiver_port, sender_port, datalen);
+  printf("Data Rx: %.*s\n", datalen, data);
+
+  int bit_index = 1;
+  uint8_t subject_id = get_char_from(bit_index, data);
+  bit_index += 8;
+  if (get_bit(0, data)) { //Access request
+	  if (is_already_associated(subject_id) && hid_s_r_req_success(subject_id)) { //TODO dubbel redundant, want hid_s_r_req_success omvat is_already_assocation en in handle_subject_access_request wordt nog eens (impliciet) gecheckt of subject associated is
+		  handle_subject_access_request(c, sender_addr, data, datalen, subject_id, bit_index);
+	  } else {
+		  printf("Request denied, because no association with this subject exists.\n");
+		  send_nack(c, sender_addr);
+	  }
+  } else { //Hidra protocol message
+	  if (is_already_associated(subject_id) && !hid_s_r_req_success(subject_id)) {
+		  handle_hidra_subject_exchanges(c, sender_addr, data, datalen, subject_id);
+	  } else {
+		  printf("Hidra protocol message from subject without proper preceding steps.\n");
+	  }
+  }
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -474,7 +499,7 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		current_subject->hid_cm_ind_success = 1;
 	}
 	else if (hid_cm_ind_success(subject_id)) { //TODO check if content of message checks out
-		set_hid_cm_ind_req_succes(subject_id, 1);
+		set_hid_cm_ind_req_success(subject_id, 1);
 		printf("\n");
 		printf("End of Hidra exchange with ACS\n");
 	}
@@ -531,14 +556,14 @@ receiver_acs(struct simple_udp_connection *c,
   printf("\n");
 
   int bit_index = 1;
-  if (get_bit(0, data) == 0) {
-	  set_up_hidra_association_with_acs(c, sender_addr, data, datalen, bit_index);
-  } else {
+  if (get_bit(0, data)) {
 	  if (is_already_associated(get_char_from(bit_index, data))) {
 		  handle_policy_update(c, sender_addr, data, datalen, bit_index);
 	  } else {
 		  printf("Trying to update a policy of a non-associated subject. \n");
 	  }
+  } else {
+	  set_up_hidra_association_with_acs(c, sender_addr, data, datalen, bit_index);
   }
 }
 /*---------------------------------------------------------------------------*/
