@@ -187,8 +187,7 @@ rule_get_first_obl_index(uint8_t *policy, int bit_index) {
 	//#bits(max_expression_index) = 3
 	bit_index += 3;
 
-	//Go through all expression
-	uint8_t ind = 0;
+	//Go through all expressions
 	while(nb_exp) {
 		bit_index = expression_increase_index(policy, bit_index);
 		nb_exp--;

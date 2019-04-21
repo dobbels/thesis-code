@@ -330,11 +330,11 @@ handle_subject_access_request(struct simple_udp_connection *c,
 				// Assumption for demo purposes: 1 single expression inside the rule
 				int exp_bit_index = rule_get_first_exp_index(current_sub->policy,rule_bit_index);
 				//Check condition
-				uint8_t condition_is_met = condition_is_met(current_sub->policy,exp_bit_index);
-				if (!condition_is_met && rule_get_effect(current_sub->policy, rule_bit_index) == 0) {
+				uint8_t condition_met = condition_is_met(current_sub->policy,exp_bit_index);
+				if (!condition_met && rule_get_effect(current_sub->policy, rule_bit_index) == 0) {
 					printf("Condition was met, therefore access is granted.\n");
 					rule_checks_out = 1;
-				} else if (condition_is_met && rule_get_effect(current_sub->policy, rule_bit_index) == 1) {
+				} else if (condition_met && rule_get_effect(current_sub->policy, rule_bit_index) == 1) {
 					printf("Condition was not met, therefore access is granted.\n");
 					rule_checks_out = 1;
 				} else {
