@@ -37,7 +37,7 @@
 
 static struct simple_udp_connection unicast_connection;
 uip_ipaddr_t *ipaddr;
-uip_ipaddr_t *send_addr;
+uip_ipaddr_t *resource_addr;
 
 
 PROCESS(hidra_r,"HidraR");

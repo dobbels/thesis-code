@@ -32,7 +32,7 @@
 
 static struct simple_udp_connection unicast_connection;
 uip_ipaddr_t *ipaddr;
-uip_ipaddr_t *send_addr;
+uip_ipaddr_t *resource_addr;
 
 
 PROCESS(hidra_r,"HidraR");
@@ -111,18 +111,18 @@ send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tij
 //	If the service is not known, the function returns NULL.
 //	If there are more than one nodes offering the service, this function
 //	returns the address of the node that most recently announced its service.
-	send_addr = servreg_hack_lookup(OTHER_SERVICE_ID);
+	resource_addr = servreg_hack_lookup(OTHER_SERVICE_ID);
 
-	if(send_addr != NULL) {
+	if(resource_addr != NULL) {
 		static unsigned int message_number;
 		char buf[20];
 
 		printf("Sending unicast to ");
-		uip_debug_ipaddr_print(send_addr);
+		uip_debug_ipaddr_print(resource_addr);
 		printf("\n");
 		sprintf(buf, "Message %d", message_number);
 		message_number++;
-		simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, send_addr);
+		simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, resource_addr);
 	} else {
 		printf("Service %d not found\n", OTHER_SERVICE_ID);
 	}

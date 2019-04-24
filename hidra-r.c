@@ -17,12 +17,12 @@
 #include "net/ip/uip-debug.h"
 
 #define ACS_UDP_PORT 1234
-#define SUBJECT_UDP_PORT 4321
+#define SUBJECT_UDP_PORT 1996
 
 static struct simple_udp_connection unicast_connection_acs;
 static struct simple_udp_connection unicast_connection_subject;
 
-uip_ipaddr_t send_addr;
+uip_ipaddr_t resource_addr;
 
 //struct policy policy;
 struct associated_subjects *associated_subjects;
@@ -109,7 +109,7 @@ execute(uint8_t function)
 
 PROCESS(hidra_r,"HidraR");
 AUTOSTART_PROCESSES(&hidra_r);
-/*---------------------------------------------------------------------------*/
+
 static void
 send_nack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr)
@@ -121,7 +121,7 @@ send_nack(struct simple_udp_connection *c,
 	const char response = 0;
 	simple_udp_sendto(c, &response, 1, sender_addr);
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 send_ack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr)
@@ -133,7 +133,7 @@ send_ack(struct simple_udp_connection *c,
 	const char response = 1;
 	simple_udp_sendto(c, &response, 1, sender_addr);
 }
-/*---------------------------------------------------------------------------*/
+
 static uint8_t
 is_already_associated(uint8_t id)
 {
@@ -149,7 +149,7 @@ is_already_associated(uint8_t id)
 
 	return result;
 }
-/*---------------------------------------------------------------------------*/
+
 //static void
 //set_hid_cm_ind_success(uint8_t id, uint8_t bit)
 //{
@@ -160,7 +160,7 @@ is_already_associated(uint8_t id)
 //		}
 //	}
 //}
-/*---------------------------------------------------------------------------*/
+
 static uint8_t
 hid_cm_ind_success(uint8_t id)
 {
@@ -177,7 +177,7 @@ hid_cm_ind_success(uint8_t id)
 
 	return result;
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 set_hid_s_r_req_success(uint8_t id, uint8_t bit)
 {
@@ -188,7 +188,7 @@ set_hid_s_r_req_success(uint8_t id, uint8_t bit)
 		}
 	}
 }
-/*---------------------------------------------------------------------------*/
+
 /**
  * Returns zero if the given id does not correspond to an associated subject
  * Returns zero if the associated subject has not completed the HID_S_R_REQ message exchange yet
@@ -209,7 +209,7 @@ hid_s_r_req_success(uint8_t id)
 
 	return result;
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 set_hid_cm_ind_req_success(uint8_t subject_id, uint8_t bit)
 {
@@ -220,7 +220,7 @@ set_hid_cm_ind_req_success(uint8_t subject_id, uint8_t bit)
 		}
 	}
 }
-/*---------------------------------------------------------------------------*/
+
 static uint8_t
 hid_cm_ind_req_success(uint8_t subject_id)
 {
@@ -235,7 +235,7 @@ hid_cm_ind_req_success(uint8_t subject_id)
 	}
 	return result;
 }
-/*---------------------------------------------------------------------------*/
+
 static uint8_t
 condition_is_met(uint8_t *policy, int expression_bit_index)
 {
@@ -252,7 +252,7 @@ condition_is_met(uint8_t *policy, int expression_bit_index)
 	printf("Something went wrong with condition %d.\n", function);
 	return 0;
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 perform_task(uint8_t *policy, int task_bit_index)
 {
@@ -270,7 +270,7 @@ perform_task(uint8_t *policy, int task_bit_index)
 	}
 	printf("Error processing task %d.\n", function);
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 handle_subject_access_request(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
@@ -381,7 +381,7 @@ handle_subject_access_request(struct simple_udp_connection *c,
 		send_nack(c, sender_addr);
 	}
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 handle_hidra_subject_exchanges(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
@@ -400,7 +400,7 @@ handle_hidra_subject_exchanges(struct simple_udp_connection *c,
 		printf("Did not receive from subject what was expected.\n");
 	}
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 receiver_subject(struct simple_udp_connection *c,
          const uip_ipaddr_t *sender_addr,
@@ -416,7 +416,7 @@ receiver_subject(struct simple_udp_connection *c,
 		  receiver_port, sender_port, datalen);
 //  printf("Data Rx: %.*s\n", datalen, data);
 
-  int bit_index = 1;
+  int bit_index = 0;
   uint8_t subject_id = get_char_from(bit_index, data);
   bit_index += 8;
   if (get_bit(0, data)) { //Access request
@@ -434,7 +434,7 @@ receiver_subject(struct simple_udp_connection *c,
 	  }
   }
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
@@ -458,11 +458,11 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects - 1] = current_subject;
 
 		current_subject->id = subject_id;
-		printf("associated_subjects->subject_association_set[%d]->id : %d\n", associated_subjects->nb_of_associated_subjects - 1, current_subject->id);
+		printf("new subject id : %d\n", current_subject->id);
 
 		// assign policy size - works as long as policy is last part of the message - this value might cause the copying of an unused zero-byte
 		current_subject->policy_size = datalen - (bit_index/8);
-		printf("associated_subjects->subject_association_set[%d]->policy_size: %d\n", associated_subjects->nb_of_associated_subjects-1, current_subject->policy_size);
+		printf("new subject policy_size: %d\n", current_subject->policy_size);
 
 		// malloc policy range with right number of bytes
 		current_subject->policy = malloc(current_subject->policy_size * sizeof(uint8_t));
@@ -474,8 +474,8 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 				current_subject->policy);
 
 		// print policy, for debugging
-		printf("Policy associated to subject %d : \n", subject_id);
-		print_policy(current_subject->policy, 0);
+//		printf("Policy associated to subject %d : \n", subject_id);
+//		print_policy(current_subject->policy, 0);
 
 		char *response = "HID_CM_IND_REQ";
 		simple_udp_sendto(c, response, strlen(response), sender_addr);
@@ -490,7 +490,7 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		printf("Did not receive from ACS what was expected in the protocol.\n");
 	}
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 handle_policy_update(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
@@ -521,7 +521,7 @@ handle_policy_update(struct simple_udp_connection *c,
 		send_nack(c, sender_addr);
 	}
 }
-/*---------------------------------------------------------------------------*/
+
 static void
 receiver_acs(struct simple_udp_connection *c,
          const uip_ipaddr_t *sender_addr,
@@ -549,7 +549,7 @@ receiver_acs(struct simple_udp_connection *c,
 	  set_up_hidra_association_with_acs(c, sender_addr, data, datalen, bit_index);
   }
 }
-/*---------------------------------------------------------------------------*/
+
 static uip_ipaddr_t *
 set_global_address(void)
 {
@@ -573,7 +573,7 @@ set_global_address(void)
 
   return &ipaddr;
 }
-/*---------------------------------------------------------------------------*/
+
 PROCESS_THREAD(hidra_r, ev, data)
 { 
 	PROCESS_BEGIN();
@@ -596,10 +596,7 @@ PROCESS_THREAD(hidra_r, ev, data)
 	initialize_reference_table();
 
 	while(1) {
-		// At the click of the button, a packet will be sent
 //		PROCESS_WAIT_EVENT_UNTIL((ev==sensors_event) && (data == &button_sensor));
-//		printf("button pressed\n");
-//		send_unicast();
 
 		PROCESS_WAIT_EVENT();
 	}

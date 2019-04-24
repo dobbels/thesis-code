@@ -41,7 +41,7 @@ static struct simple_udp_connection unicast_connection;
 //uip_ipaddr(&ipaddr, 192,168,1,2);
 //c = uip_connect(&ipaddr, UIP_HTONS(80));
 
-uip_ipaddr_t send_addr;
+uip_ipaddr_t resource_addr;
 
 
 // Construct IPv4 address.
@@ -102,22 +102,22 @@ set_global_address(void)
 static void
 set_send_address(void)
 {
-	uip_ip6addr(&send_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0x212, 0x7402, 0x2, 0x202);
+	uip_ip6addr(&resource_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0x212, 0x7402, 0x2, 0x202);
 
 	printf("IPv6 send address: ");
-    uip_debug_ipaddr_print(&send_addr);
+    uip_debug_ipaddr_print(&resource_addr);
     printf("\n");
 }
 /*---------------------------------------------------------------------------*/
 static void
 send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tijdens een protocol
 {
-	if(&send_addr != NULL) {
+	if(&resource_addr != NULL) {
 		static unsigned int message_number;
 		char buf[20];
 
 		printf("Sending unicast to ");
-		uip_debug_ipaddr_print(&send_addr);
+		uip_debug_ipaddr_print(&resource_addr);
 		printf("\n");
 		sprintf(buf, "Message %d", message_number); //print into the buffer
 		message_number++;
@@ -126,7 +126,7 @@ send_unicast(void) //TODO om te vormen naar 'return unicast' voor antwoorden tij
 		printf("udp_conn: ");
 		printf(((&unicast_connection)->udp_conn) != NULL);
 		printf("\n");
-		simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, &send_addr);
+		simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, &resource_addr);
 	} else {
 		printf("No send_addr given\n");
 	}
