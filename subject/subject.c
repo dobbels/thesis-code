@@ -14,11 +14,13 @@
 #define ACS_UDP_PORT 4321
 #define RESOURCE_UDP_PORT 1996
 
-#define ID 1
+//#define ID 3
+static uint8_t subject_id = 0;
 
 static uint8_t authentication_requested = 0;
 static uint8_t credentials_requested = 0;
 static uint8_t resource_access_requested = 0;
+static uint8_t security_association_established = 0;
 
 static struct simple_udp_connection unicast_connection_acs;
 static struct simple_udp_connection unicast_connection_resource;
@@ -46,12 +48,24 @@ receiver_resource(struct simple_udp_connection *c,
 	if (resource_access_requested) {
 		if(data[0]){
 			printf("End of Successful Hidra Exchange.\n");
+			security_association_established = 1;
 		} else {
 			printf("Received Non-Acknowledge: Unsuccessful hidra exchange.\n");
 		}
 	} else {
 		printf("Unexpected message from resource\n");
 	}
+}
+
+static void
+send_access_request(void) {
+	//Content of access request, all full bytes for simplicity
+	// = id (1 byte) + action (1 byte) + system_reference (1 byte)
+	const char action =  2;//PUT
+	const char function =  18;
+	const char response[3] = {subject_id, action, function};
+	simple_udp_sendto(&unicast_connection_resource, response, strlen(response), &resource_addr);
+	resource_access_requested = 1;
 }
 
 static void
@@ -71,13 +85,11 @@ receiver_acs(struct simple_udp_connection *c,
 	if (authentication_requested) {
 		if (credentials_requested) {
 				// Perform phase 3, the access request
-				const char *response = ID;
-				simple_udp_sendto(&unicast_connection_resource, response, strlen(response), &resource_addr);
-				resource_access_requested = 1;
+				send_access_request();
 		} else {
 			// Perform phase 2
-			const char *response = ID;
-			simple_udp_sendto(&unicast_connection_acs, response, strlen(response), &acs_addr);
+			const char response = subject_id;
+			simple_udp_sendto(&unicast_connection_acs, &response, strlen(&response), &acs_addr);
 			credentials_requested = 1;
 		}
 	} else {
@@ -87,8 +99,10 @@ receiver_acs(struct simple_udp_connection *c,
 
 static void
 start_hidra_protocol(void) {
-	const char *response = ID;
-	simple_udp_sendto(&unicast_connection_acs, response, strlen(response), &acs_addr);
+	//TODO zou 15 bytes lang moeten zijn?! Als je niet vindt waarom, doe dan gewoon bvb 4, voor elk veld 1
+	const char response[15];
+	response[0] = subject_id;
+	simple_udp_sendto(&unicast_connection_acs, &response, strlen(&response), &acs_addr);
 	authentication_requested = 1;
 }
 
@@ -104,7 +118,7 @@ set_acs_address(void)
 	uip_ip6addr(&acs_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0x1);
 }
 
-static void
+static uip_ipaddr_t *
 set_global_address(void)
 {
   static uip_ipaddr_t ipaddr;
@@ -124,6 +138,7 @@ set_global_address(void)
       printf("\n");
     }
   }
+  return &ipaddr;
 }
 
 PROCESS_THREAD(hidra_subject, ev, data)
@@ -132,7 +147,8 @@ PROCESS_THREAD(hidra_subject, ev, data)
 
 	SENSORS_ACTIVATE(button_sensor);
 
-	set_global_address();
+	//use global address to deduce node-id
+	subject_id = set_global_address()->u8[15];
 	set_resource_address();
 	set_acs_address();
 
@@ -148,10 +164,11 @@ PROCESS_THREAD(hidra_subject, ev, data)
 		PROCESS_WAIT_EVENT();
 
 		if ((ev==sensors_event) && (data == &button_sensor)) {
-			printf("Starting Hidra Protocol\n");
-			start_hidra_protocol();
+			if (!security_association_established) {
+				printf("Starting Hidra Protocol\n");
+				start_hidra_protocol();
+			}
 		}
 	}
-
 	PROCESS_END();
 }

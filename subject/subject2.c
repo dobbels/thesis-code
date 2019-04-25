@@ -14,13 +14,21 @@
 #define ACS_UDP_PORT 4321
 #define RESOURCE_UDP_PORT 1996
 
+#define ID 4
+
+static uint8_t authentication_requested = 0;
+static uint8_t credentials_requested = 0;
+static uint8_t resource_access_requested = 0;
+static uint8_t security_association_established = 0;
+
 static struct simple_udp_connection unicast_connection_acs;
 static struct simple_udp_connection unicast_connection_resource;
 
 uip_ipaddr_t resource_addr;
+uip_ipaddr_t acs_addr;
 
-PROCESS(hidra_r,"HidraR");
-AUTOSTART_PROCESSES(&hidra_r);
+PROCESS(hidra_subject,"HidraSubject");
+AUTOSTART_PROCESSES(&hidra_subject);
 
 static void
 receiver_resource(struct simple_udp_connection *c,
@@ -31,7 +39,32 @@ receiver_resource(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
+	printf("\nData received from: ");
+	PRINT6ADDR(sender_addr);
+	printf("\nAt port %d from port %d with length %d\n",
+		  receiver_port, sender_port, datalen);
+	printf("Data Rx: %.*s\n", datalen, data);
+	if (resource_access_requested) {
+		if(data[0]){
+			printf("End of Successful Hidra Exchange.\n");
+			security_association_established = 1;
+		} else {
+			printf("Received Non-Acknowledge: Unsuccessful hidra exchange.\n");
+		}
+	} else {
+		printf("Unexpected message from resource\n");
+	}
+}
 
+static void
+send_access_request(void) {
+	//Content of access request, all full bytes for simplicity
+	// = id (1 byte) + action (1 byte) + system_reference (1 byte)
+	const char action =  2;//PUT
+	const char function =  18;
+	const char response[3] = {ID, action, function};
+	simple_udp_sendto(&unicast_connection_resource, response, strlen(response), &resource_addr);
+	resource_access_requested = 1;
 }
 
 static void
@@ -43,12 +76,44 @@ receiver_acs(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
+	printf("\nData received from: ");
+	PRINT6ADDR(sender_addr);
+	printf("\nAt port %d from port %d with length %d\n",
+		  receiver_port, sender_port, datalen);
+	printf("Data Rx: %.*s\n", datalen, data);
+	if (authentication_requested) {
+		if (credentials_requested) {
+				// Perform phase 3, the access request
+				send_access_request();
+		} else {
+			// Perform phase 2
+			const char response = ID;
+			simple_udp_sendto(&unicast_connection_acs, &response, strlen(&response), &acs_addr);
+			credentials_requested = 1;
+		}
+	} else {
+		printf("Unexpected message from ACS\n");
+	}
+}
+
+static void
+start_hidra_protocol(void) {
+	//TODO zou 15 bytes lang moeten zijn?! Maar nog geen crypto. Dat begint in ACS.
+	const char response = ID;
+	simple_udp_sendto(&unicast_connection_acs, &response, strlen(&response), &acs_addr);
+	authentication_requested = 1;
 }
 
 static void
 set_resource_address(void)
 {
 	uip_ip6addr(&resource_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0xc30c, 0, 0, 0x2);
+}
+
+static void
+set_acs_address(void)
+{
+	uip_ip6addr(&acs_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0x1);
 }
 
 static void
@@ -73,7 +138,7 @@ set_global_address(void)
   }
 }
 
-PROCESS_THREAD(hidra_r, ev, data)
+PROCESS_THREAD(hidra_subject, ev, data)
 {
 	PROCESS_BEGIN();
 
@@ -81,6 +146,7 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 	set_global_address();
 	set_resource_address();
+	set_acs_address();
 
 	simple_udp_register(&unicast_connection_acs, ACS_UDP_PORT,
 						  NULL, ACS_UDP_PORT,
@@ -94,10 +160,11 @@ PROCESS_THREAD(hidra_r, ev, data)
 		PROCESS_WAIT_EVENT();
 
 		if ((ev==sensors_event) && (data == &button_sensor)) {
-			char *response = "COMMUNICATION TEST";
-			simple_udp_sendto(&unicast_connection_resource, response, strlen(response), &resource_addr);
+			if (!security_association_established) {
+				printf("Starting Hidra Protocol\n");
+				start_hidra_protocol();
+			}
 		}
 	}
-
 	PROCESS_END();
 }

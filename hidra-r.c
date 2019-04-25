@@ -59,13 +59,14 @@ log_request() {
 
 static uint8_t
 switch_light_on() {
-	leds_on(7);
+	leds_off(LEDS_ALL);
+	leds_on(LEDS_GREEN);
 	return (0);
 }
 
 static uint8_t
 switch_light_off() {
-	leds_off(7);
+	leds_off(LEDS_ALL);
 	return (0);
 }
 
@@ -120,6 +121,10 @@ send_nack(struct simple_udp_connection *c,
 
 	const char response = 0;
 	simple_udp_sendto(c, &response, 1, sender_addr);
+
+	// This turns on the red light, whenever anything is non-acknowledged
+	leds_off(LEDS_ALL);
+	leds_on(LEDS_RED);
 }
 
 static void
@@ -279,18 +284,11 @@ handle_subject_access_request(struct simple_udp_connection *c,
         uint8_t sub_id,
         int bit_index)
 {
-
 	//Expected demo format: Action: PUT + Task: light_switch_x
-	uint8_t action = get_3_bits_from(bit_index, data);
-	bit_index += 3;
+	uint8_t action = get_char_from(bit_index, data);
+	bit_index += 8;
 	uint8_t function = get_char_from(bit_index, data);
 	bit_index += 8;
-	uint8_t input_existence_mask = get_bit(bit_index, data);
-	bit_index += 1;
-	if (input_existence_mask) {
-		printf("Error: Did not expect a task with arguments.\n");
-	}
-
 
 	// print request (if it is the expected demo request)
 	if (action == 2 && function == 18) {
@@ -380,25 +378,7 @@ handle_subject_access_request(struct simple_udp_connection *c,
 		printf("Request denied, because no association with this subject exists.\n");
 		send_nack(c, sender_addr);
 	}
-}
-
-static void
-handle_hidra_subject_exchanges(struct simple_udp_connection *c,
-		const uip_ipaddr_t *sender_addr,
-		const uint8_t *data,
-        uint16_t datalen,
-        uint8_t subject_id)
-{
-	if (hid_cm_ind_req_success(subject_id)) {
-		char *response = "HID_S_R_REP";
-		simple_udp_sendto(c, response, strlen(response), sender_addr);
-		set_hid_s_r_req_success(subject_id, 1);
-		printf("End of Hidra exchange with Subject\n");
-		printf("\n");
-	}
-	else {
-		printf("Did not receive from subject what was expected.\n");
-	}
+	printf("End of Hidra exchange with Subject\n");
 }
 
 static void
@@ -419,19 +399,12 @@ receiver_subject(struct simple_udp_connection *c,
   int bit_index = 0;
   uint8_t subject_id = get_char_from(bit_index, data);
   bit_index += 8;
-  if (get_bit(0, data)) { //Access request
-	  if (is_already_associated(subject_id) && hid_s_r_req_success(subject_id)) { //TODO dubbel redundant, want hid_s_r_req_success omvat is_already_assocation en in handle_subject_access_request wordt nog eens (impliciet) gecheckt of subject associated is
-		  handle_subject_access_request(c, sender_addr, data, datalen, subject_id, bit_index);
-	  } else {
-		  printf("Request denied, because no association with this subject exists.\n");
-		  send_nack(c, sender_addr);
-	  }
-  } else { //Hidra protocol message
-	  if (is_already_associated(subject_id) && !hid_s_r_req_success(subject_id)) {
-		  handle_hidra_subject_exchanges(c, sender_addr, data, datalen, subject_id);
-	  } else {
-		  printf("Hidra protocol message from subject without proper preceding steps.\n");
-	  }
+
+  if (is_already_associated(subject_id) && !hid_s_r_req_success(subject_id)) { //TODO dubbel redundant, want hid_s_r_req_success omvat is_already_assocation en in handle_subject_access_request wordt nog eens (impliciet) gecheckt of subject associated is
+	  handle_subject_access_request(c, sender_addr, data, datalen, subject_id, bit_index);
+  } else {
+	  printf("Request denied, because no association with this subject exists.\n");
+	  send_nack(c, sender_addr);
   }
 }
 
