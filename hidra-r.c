@@ -400,7 +400,7 @@ receiver_subject(struct simple_udp_connection *c,
   uint8_t subject_id = get_char_from(bit_index, data);
   bit_index += 8;
 
-  if (is_already_associated(subject_id) && !hid_s_r_req_success(subject_id)) { //TODO dubbel redundant, want hid_s_r_req_success omvat is_already_assocation en in handle_subject_access_request wordt nog eens (impliciet) gecheckt of subject associated is
+  if (is_already_associated(subject_id) && !hid_s_r_req_success(subject_id) && hid_cm_ind_req_success(subject_id)) {
 	  handle_subject_access_request(c, sender_addr, data, datalen, subject_id, bit_index);
   } else {
 	  printf("Request denied, because no association with this subject exists.\n");

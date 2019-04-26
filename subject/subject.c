@@ -1,8 +1,9 @@
 #include "contiki.h"
-
+#include "lib/random.h"
 #include "net/ipv6/uip-ds6.h"
 #include "dev/button-sensor.h"
 #include "simple-udp.h"
+#include "cfs/cfs.h"
 
 #include <stdio.h>
 
@@ -100,9 +101,20 @@ receiver_acs(struct simple_udp_connection *c,
 static void
 start_hidra_protocol(void) {
 	//TODO zou 15 bytes lang moeten zijn?! Als je niet vindt waarom, doe dan gewoon bvb 4, voor elk veld 1
-	const char response[15];
-	response[0] = subject_id;
-	simple_udp_sendto(&unicast_connection_acs, &response, strlen(&response), &acs_addr);
+	uint8_t temp[4];
+	// IdS
+	temp[0] = subject_id;
+	// IdCM
+	temp[1] = 0;
+	// LifetimeTGT
+	temp[2] = 255;
+	//Nonce1 (2 bytes)
+	uint16_t nonce = random_rand();
+	temp[3] = nonce && 0xffff;
+//	temp[3] = (nonce >> 8);
+//	temp[4] = nonce && 0xffff;
+	const uint8_t *response = temp;
+	simple_udp_sendto(&unicast_connection_acs, response, 4, &acs_addr);
 	authentication_requested = 1;
 }
 
@@ -141,16 +153,92 @@ set_global_address(void)
   return &ipaddr;
 }
 
+static void
+test_file_operations() {
+	/* step 1 */
+	char message[32];
+	char buf[100];
+
+	strcpy(message,"#1.hello world.");
+	strcpy(buf,message);
+	printf("step 1: %s\n", buf );
+
+	/* End Step 1. We will add more code below this comment later */
+	const char * filename = "test-file";
+	int n;
+	int fd_write = cfs_open(filename, CFS_WRITE);
+	if(fd_write != -1) {
+	  n = cfs_write(fd_write, message, sizeof(message));
+	  cfs_close(fd_write);
+	  printf("step 2: successfully written to cfs. wrote %i bytes\n", n);
+	} else {
+	  printf("ERROR: could not write to memory in step 2.\n");
+	}
+	/* step 3 */
+	/* reading from cfs */
+	strcpy(buf,"empty string");
+	int fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+	  cfs_read(fd_read, buf, sizeof(message));
+	  printf("step 3: %s\n", buf);
+	  cfs_close(fd_read);
+	} else {
+	  printf("ERROR: could not read from memory in step 3.\n");
+	}
+
+	strcpy(message,"#1.hello test.");
+	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	 if(fd_write != -1) {
+	   n = cfs_write(fd_write, message, sizeof(message));
+	   cfs_close(fd_write);
+	   printf("step 4: successfully appended data to cfs. wrote %i bytes\n",n);
+	 } else {
+	   printf("ERROR: could not write to memory in step 4.\n");
+	 }
+	strcpy(buf,"empty string");
+	fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+	   cfs_seek(fd_read, sizeof(message), CFS_SEEK_SET);
+	   cfs_read(fd_read, buf, sizeof(message));
+	   printf("step 5: #2 - %s\n", buf);
+	   cfs_seek(fd_read, sizeof(message), CFS_SEEK_SET);
+	   cfs_seek(fd_read, 8, CFS_SEEK_CUR);
+	   cfs_read(fd_read, buf, sizeof(message));
+	   printf("step 5: #2 - %s\n", buf);
+	   //Dit is om een of andere reden niet mogelijk na cfs_read. Het lukt alleen met een SEEK_SET er net voor
+	   cfs_seek(fd_read, 8, CFS_SEEK_CUR);
+	   cfs_read(fd_read, buf, sizeof(message));
+	   printf("step 5: #2 - %s\n", buf);
+	   cfs_close(fd_read);
+	 } else {
+	   printf("ERROR: could not read from memory in step 5.\n");
+	 }
+	/*        */
+	/* step 6 */
+	/*        */
+	/* remove the file from cfs */
+	cfs_remove(filename);
+	fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read == -1) {
+	printf("Successfully removed file\n");
+	} else {
+	printf("ERROR: could read from memory in step 6.\n");
+	}
+}
+
 PROCESS_THREAD(hidra_subject, ev, data)
 {
 	PROCESS_BEGIN();
 
 	SENSORS_ACTIVATE(button_sensor);
+//	random_init();
 
 	//use global address to deduce node-id
 	subject_id = set_global_address()->u8[15];
 	set_resource_address();
 	set_acs_address();
+
+//	test_file_operations();
 
 	simple_udp_register(&unicast_connection_acs, ACS_UDP_PORT,
 						  NULL, ACS_UDP_PORT,
