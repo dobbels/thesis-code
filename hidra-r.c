@@ -582,9 +582,9 @@ PROCESS_THREAD(hidra_r, ev, data)
 	AES_init_ctx(&resource_key_context, key);
 	//Encrypt a copy of the key as a test
 	printf("%s\n", text);
-	AES_CBC_encrypt_buffer(&resource_key_context, text, 16);
+//	AES_CBC_encrypt_buffer(&resource_key_context, text, 16);
 	printf("%s\n", text);
-	AES_CBC_decrypt_buffer(&resource_key_context, text, 16);
+//	AES_CBC_decrypt_buffer(&resource_key_context, text, 16);
 	printf("%s\n", text);
 	//////////////////////////
 
