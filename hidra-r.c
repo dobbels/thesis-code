@@ -4,6 +4,9 @@
 #include "dev/leds.h"
 #include "simple-udp.h"
 
+#define CBC 1
+#include "tiny-AES-c/aes.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -23,6 +26,10 @@ static struct simple_udp_connection unicast_connection_acs;
 static struct simple_udp_connection unicast_connection_subject;
 
 uip_ipaddr_t resource_addr;
+
+const uint8_t *key = "sensor---sleutel"; //TODO warning: differ in signedness, dus mss ga je andere init moeten doen om overeen te komen met java.
+struct AES_ctx resource_key_context;
+uint8_t *text = "sensor---sleutel";
 
 //struct policy policy;
 struct associated_subjects *associated_subjects;
@@ -363,6 +370,8 @@ handle_subject_access_request(struct simple_udp_connection *c,
 
 			send_ack(c, sender_addr);
 
+			set_hid_s_r_req_success(sub_id, 1);
+
 			// Let's assume this operation requires a lot of battery
 			if (battery_level > 50) {
 				battery_level -= 50;
@@ -567,6 +576,17 @@ PROCESS_THREAD(hidra_r, ev, data)
 	associated_subjects->nb_of_associated_subjects = 0;
 
 	initialize_reference_table();
+
+	//////////////////////////
+	//TEST AES
+	AES_init_ctx(&resource_key_context, key);
+	//Encrypt a copy of the key as a test
+	printf("%s\n", text);
+	AES_CBC_encrypt_buffer(&resource_key_context, text, 16);
+	printf("%s\n", text);
+	AES_CBC_decrypt_buffer(&resource_key_context, text, 16);
+	printf("%s\n", text);
+	//////////////////////////
 
 	while(1) {
 //		PROCESS_WAIT_EVENT_UNTIL((ev==sensors_event) && (data == &button_sensor));

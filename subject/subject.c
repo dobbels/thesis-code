@@ -29,6 +29,8 @@ static struct simple_udp_connection unicast_connection_resource;
 uip_ipaddr_t resource_addr;
 uip_ipaddr_t acs_addr;
 
+uint8_t *key = "gebruikersleutel";
+
 PROCESS(hidra_subject,"HidraSubject");
 AUTOSTART_PROCESSES(&hidra_subject);
 

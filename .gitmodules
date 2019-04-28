@@ -1,3 +1,6 @@
 [submodule "contiki"]
 	path = contiki
 	url = https://github.com/contiki-os/contiki.git
+[submodule "tiny-AES-c"]
+	path = tiny-AES-c
+	url = https://github.com/kokke/tiny-AES-c.git
