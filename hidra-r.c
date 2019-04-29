@@ -4,7 +4,7 @@
 #include "dev/leds.h"
 #include "simple-udp.h"
 
-#define CBC 1
+//#define CBC 1
 #include "tiny-AES-c/aes.h"
 
 #include <stdio.h>
@@ -46,7 +46,7 @@ struct reference {
 };
 
 //Space currently reserved for 10 references
-#define max_nb_of_references 10
+#define max_nb_of_references 5
 struct reference_table {
 	struct reference references[max_nb_of_references];
 } reference_table;
@@ -71,11 +71,11 @@ switch_light_on() {
 	return (0);
 }
 
-static uint8_t
-switch_light_off() {
-	leds_off(LEDS_ALL);
-	return (0);
-}
+//static uint8_t
+//switch_light_off() {
+//	leds_off(LEDS_ALL);
+//	return (0);
+//}
 
 static void
 initialize_reference_table()
@@ -86,8 +86,8 @@ initialize_reference_table()
 	reference_table.references[1].function_pointer = &log_request;
 	reference_table.references[2].id = 18;
 	reference_table.references[2].function_pointer = &switch_light_on;
-	reference_table.references[3].id = 19;
-	reference_table.references[3].function_pointer = &switch_light_off;
+//	reference_table.references[3].id = 19;
+//	reference_table.references[3].function_pointer = &switch_light_off;
 }
 
 static struct reference *

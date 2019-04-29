@@ -1,4 +1,4 @@
-#include <stdio.h>
+nclude <stdio.h>
 #include <stdlib.h>
 
 #include "policy.h"
@@ -371,4 +371,3 @@ unpack_attribute(const uint8_t *data, int bit_index, struct attribute *attr)
 
 	return bit_index;
 }
-
