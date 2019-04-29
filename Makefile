@@ -7,7 +7,7 @@ CFLAGS+= -DUIP_CONF_IPV6_RPL
 CONTIKI_WITH_IPV6 = 1
 
 PROJECT_SOURCEFILES += encoded_policy.c
-PROJECT_SOURCEFILES += policy.c
+#PROJECT_SOURCEFILES += policy.c
 
 #LDFLAGS += -L/tiny-AES-c
 TARGET_LIBFILES += tiny-AES-c/libaes.a  #-L./libaes #-laes
