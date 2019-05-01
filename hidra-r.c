@@ -1,10 +1,13 @@
 #include "contiki.h"
 
+#include "net/ip/uip.h"
+#include "net/ipv6/uip-nd6.h"
+#include "net/ipv6/uip-ds6-route.h"
+#include "net/ipv6/uip-ds6-nbr.h"
 #include "net/ipv6/uip-ds6.h"
 #include "dev/leds.h"
 #include "simple-udp.h"
 
-//#define CBC 1
 #include "tiny-AES-c/aes.h"
 
 #include <stdio.h>
@@ -13,6 +16,7 @@
 
 //#include "policy.h"
 #include "encoded_policy.h"
+#include "byte_operations.h"
 
 // To print the IPv6 addresses in a friendlier way
 #include "debug.h"
@@ -27,18 +31,16 @@ static struct simple_udp_connection unicast_connection_subject;
 
 uip_ipaddr_t resource_addr;
 
-uint8_t key[16] =        { (uint8_t) 0x2b, (uint8_t) 0x7e, (uint8_t) 0x15, (uint8_t) 0x16, (uint8_t) 0x28, (uint8_t) 0xae, (uint8_t) 0xd2, (uint8_t) 0xa6, (uint8_t) 0xab, (uint8_t) 0xf7, (uint8_t) 0x15, (uint8_t) 0x88, (uint8_t) 0x09, (uint8_t) 0xcf, (uint8_t) 0x4f, (uint8_t) 0x3c };
-struct AES_ctx resource_key_context;
-uint8_t text[16] =  { (uint8_t) 0x2b, (uint8_t) 0x7e, (uint8_t) 0x15, (uint8_t) 0x16, (uint8_t) 0x28, (uint8_t) 0xae, (uint8_t) 0xd2, (uint8_t) 0xa6, (uint8_t) 0xab, (uint8_t) 0xf7, (uint8_t) 0x15, (uint8_t) 0x88, (uint8_t) 0x09, (uint8_t) 0xcf, (uint8_t) 0x4f, (uint8_t) 0x3c };
+uint8_t resource_key[16] =
+	{ (uint8_t) 0x2b, (uint8_t) 0x7e, (uint8_t) 0x15, (uint8_t) 0x16,
+		(uint8_t) 0x28, (uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x2b,
+		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
+		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
 
-static void phex(uint8_t* str);
-static int test_encrypt_cbc(void);
-static int test_decrypt_cbc(void);
-static int test_encrypt_ctr(void);
-static int test_decrypt_ctr(void);
-static int test_encrypt_ecb(void);
-static int test_decrypt_ecb(void);
-static void test_encrypt_ecb_verbose(void);
+
+static void full_phex(uint8_t* str, uint8_t length);
+static void phex(uint8_t* str, uint8_t len);
+static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
 
 //struct policy policy;
 struct associated_subjects *associated_subjects;
@@ -584,95 +586,32 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 	initialize_reference_table();
 
-	//////////////////////////
-	//TEST AES with ciphertext stealing
-	uint8_t plain_text[60] = { (uint8_t) 0x6b, (uint8_t) 0xc1, (uint8_t) 0xbe, (uint8_t) 0xe2, (uint8_t) 0x2e, (uint8_t) 0x40, (uint8_t) 0x9f, (uint8_t) 0x96, (uint8_t) 0xe9, (uint8_t) 0x3d, (uint8_t) 0x7e, (uint8_t) 0x11, (uint8_t) 0x73, (uint8_t) 0x93, (uint8_t) 0x17, (uint8_t) 0x2a,
-                               (uint8_t) 0xae, (uint8_t) 0x2d, (uint8_t) 0x8a, (uint8_t) 0x57, (uint8_t) 0x1e, (uint8_t) 0x03, (uint8_t) 0xac, (uint8_t) 0x9c, (uint8_t) 0x9e, (uint8_t) 0xb7, (uint8_t) 0x6f, (uint8_t) 0xac, (uint8_t) 0x45, (uint8_t) 0xaf, (uint8_t) 0x8e, (uint8_t) 0x51,
-                               (uint8_t) 0x30, (uint8_t) 0xc8, (uint8_t) 0x1c, (uint8_t) 0x46, (uint8_t) 0xa3, (uint8_t) 0x5c, (uint8_t) 0xe4, (uint8_t) 0x11, (uint8_t) 0xe5, (uint8_t) 0xfb, (uint8_t) 0xc1, (uint8_t) 0x19, (uint8_t) 0x1a, (uint8_t) 0x0a, (uint8_t) 0x52, (uint8_t) 0xef,
-                               (uint8_t) 0xf6, (uint8_t) 0x9f, (uint8_t) 0x24, (uint8_t) 0x45, (uint8_t) 0xdf, (uint8_t) 0x4f, (uint8_t) 0x9b, (uint8_t) 0x17, (uint8_t) 0xad, (uint8_t) 0x2b, (uint8_t) 0x41, (uint8_t) 0x7b };
-	
-	printf("Start AES test\n");
-	AES_init_ctx(&resource_key_context, key);
-	//Encrypt a copy of the key as a test
-	phex(text);
-	AES_ECB_encrypt(&resource_key_context, text);
-	phex(text);
-	AES_ECB_decrypt(&resource_key_context, text);
-	phex(text);
-	////////////////////////// test.c
-//	test_encrypt_ecb_verbose();
-	
-	//////////////////////////
 	PROCESS_END();
 }
 
-// prints string as hex
-static void phex(uint8_t* str)
+static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 {
+	uint8_t iv[16]  = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
+	struct AES_ctx ctx;
 
-#if defined(AES256)
-    uint8_t len = 32;
-#elif defined(AES192)
-    uint8_t len = 24;
-#elif defined(AES128)
-    uint8_t len = 16;
-#endif
+	AES_init_ctx_iv(&ctx, key, iv);
+	AES_CTR_xcrypt_buffer(&ctx, in, length);
+}
 
+static void full_phex(uint8_t* str, uint8_t length) {
+	int i = 0;
+	for (; i < (length/16) ; i++) {
+		phex(str + i * 16, 16);
+	}
+	phex(str + i * 16, length%16);
+}
+
+// prints string as hex
+static void phex(uint8_t* str, uint8_t len)
+{
     unsigned char i;
     for (i = 0; i < len; ++i)
         printf("%.2x", str[i]);
-    printf("\n");
-}
-
-// The given length is in bytes and does not have to be rounded up to a multiple of 16
-static void encrypt_using_ciphertext_stealing(struct AES_ctx *ctx, uint8_t* buf, uint8_t length)
-{
-    // Example of more verbose verification
-
-    uint8_t i;
-
-    // 128bit key
-    uint8_t key[16] =        { (uint8_t) 0x2b, (uint8_t) 0x7e, (uint8_t) 0x15, (uint8_t) 0x16, (uint8_t) 0x28, (uint8_t) 0xae, (uint8_t) 0xd2, (uint8_t) 0xa6, (uint8_t) 0xab, (uint8_t) 0xf7, (uint8_t) 0x15, (uint8_t) 0x88, (uint8_t) 0x09, (uint8_t) 0xcf, (uint8_t) 0x4f, (uint8_t) 0x3c };
-    // 512bit text
-    uint8_t plain_text[60] = { (uint8_t) 0x6b, (uint8_t) 0xc1, (uint8_t) 0xbe, (uint8_t) 0xe2, (uint8_t) 0x2e, (uint8_t) 0x40, (uint8_t) 0x9f, (uint8_t) 0x96, (uint8_t) 0xe9, (uint8_t) 0x3d, (uint8_t) 0x7e, (uint8_t) 0x11, (uint8_t) 0x73, (uint8_t) 0x93, (uint8_t) 0x17, (uint8_t) 0x2a,
-                               (uint8_t) 0xae, (uint8_t) 0x2d, (uint8_t) 0x8a, (uint8_t) 0x57, (uint8_t) 0x1e, (uint8_t) 0x03, (uint8_t) 0xac, (uint8_t) 0x9c, (uint8_t) 0x9e, (uint8_t) 0xb7, (uint8_t) 0x6f, (uint8_t) 0xac, (uint8_t) 0x45, (uint8_t) 0xaf, (uint8_t) 0x8e, (uint8_t) 0x51,
-                               (uint8_t) 0x30, (uint8_t) 0xc8, (uint8_t) 0x1c, (uint8_t) 0x46, (uint8_t) 0xa3, (uint8_t) 0x5c, (uint8_t) 0xe4, (uint8_t) 0x11, (uint8_t) 0xe5, (uint8_t) 0xfb, (uint8_t) 0xc1, (uint8_t) 0x19, (uint8_t) 0x1a, (uint8_t) 0x0a, (uint8_t) 0x52, (uint8_t) 0xef,
-                               (uint8_t) 0xf6, (uint8_t) 0x9f, (uint8_t) 0x24, (uint8_t) 0x45, (uint8_t) 0xdf, (uint8_t) 0x4f, (uint8_t) 0x9b, (uint8_t) 0x17, (uint8_t) 0xad, (uint8_t) 0x2b, (uint8_t) 0x41, (uint8_t) 0x7b };
-	
-	
-    // print text to encrypt, key and IV
-    printf("ECB encrypt verbose:\n\n");
-    printf("plain text:\n");
-    for (i = (uint8_t) 0; i < (uint8_t) 4; ++i)
-    {
-        phex(plain_text + i * (uint8_t) 16);
-    }
-    printf("\n");
-
-    printf("key:\n");
-    phex(key);
-    printf("\n");
-
-    // print the resulting cipher as 4 x 16 byte strings
-    printf("ciphertext:\n");
-    
-    struct AES_ctx ctx;
-    AES_init_ctx(&ctx, key);
-
-    for (i = 0; i < 4; ++i)
-    {
-      AES_ECB_encrypt(&ctx, plain_text + (i * 16));
-      phex(plain_text + (i * 16));
-    }
-	
-	// print the resulting cipher as 4 x 16 byte strings
-    printf("back to plain text:\n");
-
-    for (i = 0; i < 4; ++i)
-    {
-      AES_ECB_decrypt(&ctx, plain_text + (i * 16));
-      phex(plain_text + (i * 16));
-    }
     printf("\n");
 }
 
@@ -716,16 +655,8 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
 // The number of columns comprising a state in AES. This is a constant in AES. Value=4
 #define Nb 4
 
-#if defined(AES256) && (AES256 == 1)
-    #define Nk 8
-    #define Nr 14
-#elif defined(AES192) && (AES192 == 1)
-    #define Nk 6
-    #define Nr 12
-#else
-    #define Nk 4        // The number of 32 bit words in a key.
-    #define Nr 10       // The number of rounds in AES Cipher.
-#endif
+#define Nk 4        // The number of 32 bit words in a key.
+#define Nr 10       // The number of rounds in AES Cipher.
 
 // jcallan@github points out that declaring Multiply as a function 
 // reduces code size considerably with the Keil ARM compiler.
@@ -1134,9 +1065,6 @@ static void InvCipher(state_t* state, const uint8_t* RoundKey)
 /*****************************************************************************/
 /* Public functions:                                                         */
 /*****************************************************************************/
-#if defined(ECB) && (ECB == 1)
-
-
 void AES_ECB_encrypt(const struct AES_ctx* ctx, uint8_t* buf)
 {
   // The next function call encrypts the PlainText with the Key using AES algorithm.
@@ -1149,16 +1077,6 @@ void AES_ECB_decrypt(const struct AES_ctx* ctx, uint8_t* buf)
   InvCipher((state_t*)buf, ctx->RoundKey);
 }
 
-
-#endif // #if defined(ECB) && (ECB == 1)
-
-
-
-
-
-#if defined(CBC) && (CBC == 1)
-
-
 static void XorWithIv(uint8_t* buf, const uint8_t* Iv)
 {
   uint8_t i;
@@ -1168,38 +1086,39 @@ static void XorWithIv(uint8_t* buf, const uint8_t* Iv)
   }
 }
 
-void AES_CBC_encrypt_buffer(struct AES_ctx *ctx, uint8_t* buf, uint32_t length)
+/* Symmetrical operation: same function for encrypting as for decrypting. Note any IV/nonce should never be reused with the same key */
+void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 {
-  uintptr_t i;
-  uint8_t *Iv = ctx->Iv;
-  for (i = 0; i < length; i += AES_BLOCKLEN)
+  uint8_t buffer[AES_BLOCKLEN];
+
+  unsigned i;
+  int bi;
+  for (i = 0, bi = AES_BLOCKLEN; i < length; ++i, ++bi)
   {
-    XorWithIv(buf, Iv);
-    Cipher((state_t*)buf, ctx->RoundKey);
-    Iv = buf;
-    buf += AES_BLOCKLEN;
-    //printf("Step %d - %d", i/16, i);
+    if (bi == AES_BLOCKLEN) /* we need to regen xor compliment in buffer */
+    {
+
+      memcpy(buffer, ctx->Iv, AES_BLOCKLEN);
+      Cipher((state_t*)buffer,ctx->RoundKey);
+
+      /* Increment Iv and handle overflow */
+      for (bi = (AES_BLOCKLEN - 1); bi >= 0; --bi)
+      {
+	/* inc will overflow */
+        if (ctx->Iv[bi] == 255)
+	{
+          ctx->Iv[bi] = 0;
+          continue;
+        }
+        ctx->Iv[bi] += 1;
+        break;
+      }
+      bi = 0;
+    }
+
+    buf[i] = (buf[i] ^ buffer[bi]);
   }
-  /* store Iv in ctx for next call */
-  memcpy(ctx->Iv, Iv, AES_BLOCKLEN);
 }
-
-void AES_CBC_decrypt_buffer(struct AES_ctx* ctx, uint8_t* buf,  uint32_t length)
-{
-  uintptr_t i;
-  uint8_t storeNextIv[AES_BLOCKLEN];
-  for (i = 0; i < length; i += AES_BLOCKLEN)
-  {
-    memcpy(storeNextIv, buf, AES_BLOCKLEN);
-    InvCipher((state_t*)buf, ctx->RoundKey);
-    XorWithIv(buf, ctx->Iv);
-    memcpy(ctx->Iv, storeNextIv, AES_BLOCKLEN);
-    buf += AES_BLOCKLEN;
-  }
-
-}
-
-#endif // #if defined(CBC) && (CBC == 1)
 
 //END OF CODE FROM tiny AES PROJECT
 /////////////////////////////////////////
