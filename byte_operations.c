@@ -39,18 +39,8 @@ get_bits_between(int start_index, int end_index, const uint8_t *data) {
 	char mask1;
 	char mask2;
 
-//	printf("\n");
-//	printf("start_index: %d\n",start_index);
-//	printf("end_index: %d\n",end_index);
-//	printf("start_block: %d\n",start_block);
-//	printf("end_block: %d\n",end_block);
-//	printf("nb_of_bits: %d\n",nb_of_bits);
-
 	if (start_block == end_block) {
 		mask1 = get_mask_for(nb_of_bits);
-//		printf("mask1: %d\n",mask1);
-//		printf("data[start_block]: %d\n",data[start_block]);
-//		printf("(data[start_block]>>(8-(start_index%8 + nb_of_bits))) & mask1: %d\n",(data[start_block]>>(8-(start_index%8 + nb_of_bits))) & mask1);
 		return (data[start_block]>>(8-(start_index%8 + nb_of_bits))) & mask1;
 	} else {
 		int start_block_relative_index = start_index % 8;

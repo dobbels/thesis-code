@@ -45,12 +45,15 @@ uint8_t credential_manager_nonce[8];
 
 //File structure is a concatenation of:
 //TicketCM
+int ticketcm_offset = 0;
 //Kscm
+int kscm_offset = 26;
 //Noncescm
-const char * filename = "security-properties-file";
+int noncescm_offset = 42;
 
-static void full_phex(uint8_t* str, uint8_t length);
-static void phex(uint8_t* str, uint8_t len);
+
+static void full_print_hex(uint8_t* str, uint8_t length);
+static void print_hex(uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
 
 
@@ -90,8 +93,137 @@ send_access_request(void) {
 	const char action =  2;//PUT
 	const char function =  18;
 	const char response[3] = {subject_id, action, function};
-	simple_udp_sendto(&unicast_connection_resource, response, strlen(response), &resource_addr);
+	//TODO als dit opeens niet meer werkt, zie sizeof() -> strlen() ?
+	simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
 	resource_access_requested = 1;
+}
+
+static void
+process_ans_rep(const uint8_t *data,
+        uint16_t datalen) {
+	const char * filename = "properties";
+	printf("HID_ANS_REP content:\n");
+	uint8_t ans_rep[62];
+	memcpy(ans_rep, data, datalen);
+	full_print_hex(ans_rep, sizeof(ans_rep));
+
+	//Store the encrypted TGT for the credential manager
+	int fd_write = cfs_open(filename, CFS_WRITE);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, ans_rep + 2, 26);
+		cfs_close(fd_write);
+		printf("Successfully written ticket (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	  printf("ERROR: could not write ticket to memory.\n");
+	}
+
+	printf("Encrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
+	uint8_t encrypted_index = 2 + 16 + 2 + 8;
+	full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
+
+	//Decrypt rest of message
+	xcrypt_ctr(subject_key, ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
+	printf("Decrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
+	full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
+
+	printf("Decrypted HID_ANS_REP, Kscm: \n");
+	full_print_hex(ans_rep+encrypted_index, 16);
+
+	//Store Kscm
+	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, ans_rep + encrypted_index, 16);
+		cfs_close(fd_write);
+		printf("Successfully written Kscm (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	   printf("ERROR: could not write Kscm to memory.\n");
+	}
+
+	printf("Decrypted HID_ANS_REP, Noncescm: \n");
+	full_print_hex(ans_rep+encrypted_index+16, 8);
+
+	//Store Noncescm
+	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, ans_rep + encrypted_index + 16, 8);
+		cfs_close(fd_write);
+		printf("Successfully written Noncescm (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	   printf("ERROR: could not write Noncescm to memory.\n");
+	}
+
+	//TODO if nonce1 and IDcm are stored at start of protocol, check them (and maybe update IDcm if required)?
+}
+
+static void
+construct_cm_req(uint8_t *cm_req) {
+	const char * filename = "properties";
+	//resource ID (2 bytes)
+	cm_req[0] = 0;
+	cm_req[1] = 2;
+	//Lifetime TR (1 byte)
+	cm_req[2] = 3;
+	//Nonce2 (8 bytes)
+	uint16_t part_of_nonce = random_rand();
+	cm_req[3] = (part_of_nonce >> 8);
+	cm_req[4] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	cm_req[5] = (part_of_nonce >> 8);
+	cm_req[6] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	cm_req[7] = (part_of_nonce >> 8);
+	cm_req[8] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	cm_req[9] = (part_of_nonce >> 8);
+	cm_req[10] = part_of_nonce & 0xffff;
+	//Ticket granting ticket (26 bytes)
+	int fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+	  cfs_read(fd_read, cm_req + 11, 26);
+	  cfs_close(fd_read);
+	} else {
+	  printf("ERROR: could not read ticket from memory.\n");
+	}
+	//Generate AuthNM and add to byte array
+	//IDs
+	cm_req[38] = subject_id;
+	//Noncescm + i, with i = 1
+	uint8_t i = 1;
+	fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+	   cfs_seek(fd_read, noncescm_offset, CFS_SEEK_SET);
+	   cfs_read(fd_read, cm_req + 39, 8);
+	   cfs_close(fd_read);
+	 } else {
+	   printf("ERROR: could not read noncescm from memory.\n");
+	 }
+	printf("Decrypted HID_ANS_REP, Noncescm + i: \n");
+//	full_print_hex(cm_req + 39, 8);
+	uint16_t temp = (cm_req[45]<< 8) | (cm_req[46]);
+	temp += i;
+	cm_req[45] = (temp >> 8) & 0xff;
+	cm_req[46] = temp & 0xff;
+	full_print_hex(cm_req + 39, 8);
+
+	//Print unencrypted message for debugging purposes
+	printf("Unencrypted CM_REQ message: \n");
+	full_print_hex(cm_req, 47);
+
+	uint8_t kscm[16];
+	fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+	   cfs_seek(fd_read, noncescm_offset, CFS_SEEK_SET);
+	   cfs_read(fd_read, kscm, 16);
+	   cfs_close(fd_read);
+	 } else {
+	   printf("ERROR: could not read kscm from memory.\n");
+	 }
+
+	//Encrypt last 10 bytes of message
+	xcrypt_ctr(kscm, cm_req + 37, 10);
 }
 
 static void
@@ -108,65 +240,27 @@ receiver_acs(struct simple_udp_connection *c,
 	printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
 	if (authentication_requested) {
-		if (credentials_requested) {
-				// Perform phase 3, the access request
-				send_access_request();
-		} else {
+		if (!credentials_requested) {
 			// Perform phase 2
 			if(datalen != 62) {
 				printf("Error: different length of HID_ANS_REP packet: %d\n", datalen);
 			}
-
 			//Check Subject ID
 			if (get_char_from(8, data) == subject_id) {
-				printf("HID_ANS_REP content:\n");
-				uint8_t temp[62];
-				memcpy(temp, data, datalen);
-				full_phex(temp, sizeof(temp));
-
-				//Store the encrypted TGT for the credential manager
-				int fd_write = cfs_open(filename, CFS_WRITE);
-				if(fd_write != -1) {
-					int n = cfs_write(fd_write, temp + 2, 26);
-					cfs_close(fd_write);
-					printf("Successfully written %i bytes to %s\n", n, filename);
-				} else {
-				  printf("ERROR: could not write ticket to memory.\n");
-				}
-
-				//Decrypt rest of message
-				printf("Encrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
-				uint8_t encrypted_index = 2 + 16 + 2 + 8;
-				full_phex(temp+encrypted_index, sizeof(temp) - encrypted_index);
-
-				xcrypt_ctr(subject_key, temp+encrypted_index, sizeof(temp) - encrypted_index);
-				printf("Decrypted HID_ANS_REP bytes:\n");
-				full_phex(temp+encrypted_index, sizeof(temp) - encrypted_index);
-
-				//Store Kscm
-
-
-				//Store Noncescm
-
-
-
-				//TODO if nonce1 and IDcm are stored, resp. check and update them?
-//				if (0 == memcmp((uint8_t *) temp+encrypted_index+16+8, (uint8_t *) nonce1, 8)) {
-//					printf("Received correct nonce1!\n");
-//				} else {
-//					printf("Received incorrect nonce1!\n");
-//				}
-
-
+				//Process message from authentication server
+				process_ans_rep(data, datalen);
 				//Construct message for credential manager
-
-
-				const char response = subject_id;
-				simple_udp_sendto(&unicast_connection_acs, &response, strlen(&response), &acs_addr);
+				uint8_t response[47];
+				construct_cm_req(response);
+				//Send message to credential manager
+				simple_udp_sendto(&unicast_connection_acs, response, sizeof(response), &acs_addr);
 				credentials_requested = 1;
 			} else {
-				printf("Error: wrong subject id %d\n", datalen);
+				printf("Error: wrong subject id %d\n", get_char_from(8, data));
 			}
+		} else {
+			// Perform phase 3, the access request
+			send_access_request();
 		}
 	} else {
 		printf("Unexpected message from ACS\n");
@@ -175,36 +269,36 @@ receiver_acs(struct simple_udp_connection *c,
 
 static void
 start_hidra_protocol(void) {
-	uint8_t temp[15];
+	uint8_t ans_request[15];
 	// IdS (2 bytes)
-	temp[0] = 0;
-	temp[1] = subject_id;
+	ans_request[0] = 0;
+	ans_request[1] = subject_id;
 	// IdCM (2 bytes)
-	temp[2] = 0;
-	temp[3] = 0;
+	ans_request[2] = 0;
+	ans_request[3] = 0;
 	// LifetimeTGT (3 bytes)
-	temp[4] = 1;
-	temp[5] = 1;
-	temp[6] = 1;
+	ans_request[4] = 1;
+	ans_request[5] = 1;
+	ans_request[6] = 1;
 	//Nonce1 (8 bytes)
 	uint16_t part_of_nonce = random_rand();
-	temp[7] = (part_of_nonce >> 8);
-	temp[8] = part_of_nonce && 0xffff;
+	ans_request[7] = (part_of_nonce >> 8);
+	ans_request[8] = part_of_nonce & 0xffff;
 	part_of_nonce = random_rand();
-	temp[9] = (part_of_nonce >> 8);
-	temp[10] = part_of_nonce && 0xffff;
+	ans_request[9] = (part_of_nonce >> 8);
+	ans_request[10] = part_of_nonce & 0xffff;
 	part_of_nonce = random_rand();
-	temp[11] = (part_of_nonce >> 8);
-	temp[12] = part_of_nonce && 0xffff;
+	ans_request[11] = (part_of_nonce >> 8);
+	ans_request[12] = part_of_nonce & 0xffff;
 	part_of_nonce = random_rand();
-	temp[13] = (part_of_nonce >> 8);
-	temp[14] = part_of_nonce && 0xffff;
-	printf("Nonce1: \n");
-	full_phex(temp + 7,8);
-	const uint8_t response[15];
-	//TODO How to initialize a const array as the copy of another?
-	memcpy(response, temp, sizeof(response));
-	simple_udp_sendto(&unicast_connection_acs, response, sizeof(response), &acs_addr);
+	ans_request[13] = (part_of_nonce >> 8);
+	ans_request[14] = part_of_nonce & 0xffff;
+//	printf("Nonce1: \n");
+//	full_print_hex(ans_request + 7,8);
+	printf("ANS request message: \n");
+	full_print_hex(ans_request,15);
+
+	simple_udp_sendto(&unicast_connection_acs, ans_request, sizeof(ans_request), &acs_addr);
 	authentication_requested = 1;
 }
 
@@ -288,6 +382,7 @@ test_file_operations() {
 	strcpy(buf,"empty string");
 	fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
+		//Lukt ook in combinatie met write, schrijven op een bepaalde plaats dus?
 	   cfs_seek(fd_read, sizeof(message), CFS_SEEK_SET);
 	   cfs_read(fd_read, buf, sizeof(message));
 	   printf("step 5: #2 - %s\n", buf);
@@ -343,7 +438,7 @@ PROCESS_THREAD(hidra_subject, ev, data)
 
 		if ((ev==sensors_event) && (data == &button_sensor)) {
 			if (testing) {
-
+				test_file_operations();
 			}
 			else if (!security_association_established) {
 				printf("Starting Hidra Protocol\n");
@@ -363,17 +458,17 @@ static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 	AES_CTR_xcrypt_buffer(&ctx, in, length);
 }
 
-static void full_phex(uint8_t* str, uint8_t length) {
+static void full_print_hex(uint8_t* str, uint8_t length) {
 	int i = 0;
 	for (; i < (length/16) ; i++) {
-		phex(str + i * 16, 16);
+		print_hex(str + i * 16, 16);
 	}
-	phex(str + i * 16, length%16);
+	print_hex(str + i * 16, length%16);
 	printf("\n");
 }
 
 // prints string as hex
-static void phex(uint8_t* str, uint8_t len)
+static void print_hex(uint8_t* str, uint8_t len)
 {
     unsigned char i;
     for (i = 0; i < len; ++i)
