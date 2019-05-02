@@ -37,10 +37,15 @@ uint8_t resource_key[16] =
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
 		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
 
+//File structure is a concatenation of:
+//End of the one-way key chain Kr,cm
+int k_r_cm_offset = 0;
+
 
 static void full_phex(uint8_t* str, uint8_t length);
 static void phex(uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
+void md5(uint8_t *initial_msg, size_t initial_len);
 
 //struct policy policy;
 struct associated_subjects *associated_subjects;
@@ -585,6 +590,14 @@ PROCESS_THREAD(hidra_r, ev, data)
 	associated_subjects->nb_of_associated_subjects = 0;
 
 	initialize_reference_table();
+
+	uint8_t hash[16];
+	memcpy(hash, resource_key, 16);
+	printf("Key: \n");
+	full_phex(hash, 16);
+	md5(hash,16);
+	printf("Hashed key: \n");
+	full_phex(hash, 16);
 
 	PROCESS_END();
 }
