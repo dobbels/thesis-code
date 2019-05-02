@@ -442,6 +442,41 @@ receiver_subject(struct simple_udp_connection *c,
   }
 }
 
+static void
+construct_cm_ind_req(uint8_t *cm_ind_req) {
+	const char * filename = "properties";
+	//resource ID (2 bytes)
+	cm_ind_req[0] = 0;
+	cm_ind_req[1] = 2;
+	//Nonce3 (8 bytes)
+	uint16_t part_of_nonce = random_rand();
+	cm_ind_req[2] = (part_of_nonce >> 8);
+	cm_ind_req[3] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	cm_ind_req[4] = (part_of_nonce >> 8);
+	cm_ind_req[5] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	cm_ind_req[6] = (part_of_nonce >> 8);
+	cm_ind_req[7] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	cm_ind_req[8] = (part_of_nonce >> 8);
+	cm_ind_req[9] = part_of_nonce & 0xffff;
+
+	//Store Nonce3 for later use
+	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, cm_ind_req + 2, 8);
+		cfs_close(fd_write);
+		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	   printf("ERROR: could not write Kscm to memory.\n");
+	}
+
+	//Compute and fill MAC
+	//TODO
+}
+
 // TODO more realistic file per subject
 //problem: filename based on subject id and this gave errors earlier. try to assign in one line const char * filename = "properties" + subject_id;, you get the idea
 // => TODO voeg filename toe aan subject struct
@@ -451,7 +486,11 @@ receiver_subject(struct simple_udp_connection *c,
 
 
 static void
-process_cm_ind(uint8_t subject_id, const uint8_t *data, uint16_t datalen) {
+process_cm_ind(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		uint8_t subject_id,
+		const uint8_t *data,
+		uint16_t datalen) {
 	const char * subject_filename;
 	//TODO PoC to PoC -> dit mag wat minder lelijk, maar is niet noodzakelijk. Je kan altijd pseudo code zetten en alleen belangrijkste code in bijlage
 	if (subject_id == 3) {
@@ -514,7 +553,13 @@ process_cm_ind(uint8_t subject_id, const uint8_t *data, uint16_t datalen) {
 
 	//Store key chain value in file system
 	if (!any_previous_key_chain_value_stored) {
-		any_previous_key_chain_value_stored = 1; //=> on requests from
+		any_previous_key_chain_value_stored = 1; //=> on requests from next subjects, to do or not to do?
+
+		//Request previous key chain value at credential manager
+		uint8_t response[14];
+		construct_cm__ind_req(response);
+		//Send message to credential manager
+		simple_udp_sendto(c, response, sizeof(response), sender_addr);
 
 	} else {
 		//TODO check if valid next value in keychain -> eigenlijk makkelijker om dit voor elke subject opnieuw te doen
@@ -537,41 +582,6 @@ process_cm_ind(uint8_t subject_id, const uint8_t *data, uint16_t datalen) {
 }
 
 static void
-construct_cm_ind_req(uint8_t *cm_ind_req) {
-	const char * filename = "properties";
-	//resource ID (2 bytes)
-	cm_ind_req[0] = 0;
-	cm_ind_req[1] = 2;
-	//Nonce3 (8 bytes)
-	uint16_t part_of_nonce = random_rand();
-	cm_ind_req[2] = (part_of_nonce >> 8);
-	cm_ind_req[3] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	cm_ind_req[4] = (part_of_nonce >> 8);
-	cm_ind_req[5] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	cm_ind_req[6] = (part_of_nonce >> 8);
-	cm_ind_req[7] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	cm_ind_req[8] = (part_of_nonce >> 8);
-	cm_ind_req[9] = part_of_nonce & 0xffff;
-
-	//Store Nonce3 for later use
-	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, cm_ind_req + 2, 8);
-		cfs_close(fd_write);
-		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
-		printf("\n");
-	} else {
-	   printf("ERROR: could not write Kscm to memory.\n");
-	}
-
-	//Compute and fill MAC
-	//TODO
-}
-
-static void
 set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
@@ -585,7 +595,7 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 
 	// If this is the first exchange with the ACS: extract subject id and policy
 	if (!is_already_associated(subject_id)) {
-		process_cm_ind(subject_id, data, datalen);
+		process_cm_ind(c, sender_addr, subject_id, data, datalen);
 	}
 	else if (hid_cm_ind_success(subject_id)) { //TODO if steps 4.1 and 4.2 are not necessary, also set success + print this line
 //		process_cm_ind_rep(data, datalen); TODO
