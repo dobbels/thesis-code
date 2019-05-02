@@ -215,15 +215,19 @@ construct_cm_req(uint8_t *cm_req) {
 	uint8_t kscm[16];
 	fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
-	   cfs_seek(fd_read, noncescm_offset, CFS_SEEK_SET);
-	   cfs_read(fd_read, kscm, 16);
-	   cfs_close(fd_read);
-	 } else {
-	   printf("ERROR: could not read kscm from memory.\n");
-	 }
+		cfs_seek(fd_read, kscm_offset, CFS_SEEK_SET);
+		cfs_read(fd_read, kscm, 16);
+		cfs_close(fd_read);
+	} else {
+		printf("ERROR: could not read kscm from memory.\n");
+	}
 
 	//Encrypt last 10 bytes of message
 	xcrypt_ctr(kscm, cm_req + 37, 10);
+//	printf("Encrypted CM_REQ message: \n");
+//	full_print_hex(cm_req, 47);
+//	printf("with Kscm: \n");
+//	full_print_hex(kscm, 16);
 }
 
 static void
