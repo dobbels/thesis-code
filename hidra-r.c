@@ -8,6 +8,8 @@
 #include "dev/leds.h"
 #include "simple-udp.h"
 
+#include "cfs/cfs.h"
+
 #include "tiny-AES-c/aes.h"
 
 #include <stdio.h>
@@ -37,10 +39,17 @@ uint8_t resource_key[16] =
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
 		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
 
-//File structure is a concatenation of:
-//End of the one-way key chain Kr,cm
-int k_r_cm_offset = 0;
+//Subject-specific file structure is a concatenation of:
+//NonceSR
+#define nonce_s_r_offset 0;
 
+//General file structure is a concatenation of:
+//Current last one-way key chain value Kr,cm
+#define k_i_r_cm_offset 0;
+//Nonce3
+#define nonce3_offset (k_i_r_cm_offset + 16);
+
+uint8_t any_previous_key_chain_value_stored = 0;
 
 static void full_phex(uint8_t* str, uint8_t length);
 static void phex(uint8_t* str, uint8_t len);
@@ -433,54 +442,154 @@ receiver_subject(struct simple_udp_connection *c,
   }
 }
 
+// TODO more realistic file per subject
+//problem: filename based on subject id and this gave errors earlier. try to assign in one line const char * filename = "properties" + subject_id;, you get the idea
+// => TODO voeg filename toe aan subject struct
+//	+ schrijf functie om die makkelijk te getten
+//	+ gebruik https://codereview.stackexchange.com/questions/29198/random-string-generator-in-c om filename te genereren
+//		=> als dat niet werkt, hardcode dan voor demo
+
+
+static void
+process_cm_ind(uint8_t subject_id, const uint8_t *data, uint16_t datalen) {
+	const char * subject_filename;
+	//TODO PoC to PoC -> dit mag wat minder lelijk, maar is niet noodzakelijk. Je kan altijd pseudo code zetten en alleen belangrijkste code in bijlage
+	if (subject_id == 3) {
+		subject_filename = "properties3"; //TODO super illegaal?
+	} else if (subject_id == 4) {
+		subject_filename = "properties4";
+	} else {
+		subject_filename = "properties5";
+	}
+//	const char * subject_filename = &subject_id; //TODO werkt een enkele uint8_t als file name? Cast naar char?
+	const char * filename = "properties";
+	printf("HID_CM_IND content:\n");
+	uint8_t cm_ind[62];
+	prinft("datalen 62 == %d\n", datalen);
+	memcpy(cm_ind, data, datalen);
+	full_print_hex(cm_ind, sizeof(cm_ind));
+
+	if (associated_subjects->nb_of_associated_subjects >= 10) {
+		printf("Oops, the number of associated subjects is currently set to 10.\n");
+	}
+	associated_subjects->nb_of_associated_subjects++;
+
+	struct associated_subject *current_subject = malloc(sizeof(struct associated_subject));
+	//TODO if (associated_subjects->subject_association_set != NULL) {} else handleAllocError();
+
+	associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects - 1] = current_subject;
+
+	current_subject->id = subject_id;
+	printf("new subject id : %d\n", current_subject->id);
+
+	// assign policy size based on knowledge about the rest of the message
+	current_subject->policy_size = datalen - 33;
+	printf("new subject policy_size: %d\n", current_subject->policy_size);
+
+	// malloc policy range with right number of bytes
+	current_subject->policy = malloc(current_subject->policy_size * sizeof(uint8_t));
+
+	// decrypt policy before storage
+	xcrypt_ctr(resource_key, cm_ind+29, current_subject->policy_size);
+
+	// copy decrypted policy to allocated memory
+	memcpy(current_subject->policy, cm_ind + 29); //TODO check!
+
+	// print policy, for debugging
+	printf("Policy associated to subject %d : \n", subject_id);
+	print_policy(current_subject->policy, 0);
+
+	//Ignore lifetime value
+
+	//Store NonceSR in file system
+	int fd_write = cfs_open(subject_filename, CFS_WRITE);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, cm_ind + 4, 8);
+		cfs_close(fd_write);
+		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	   printf("ERROR: could not write Kscm to memory.\n");
+	}
+
+	//Store key chain value in file system
+	if (!any_previous_key_chain_value_stored) {
+		any_previous_key_chain_value_stored = 1; //=> on requests from
+
+	} else {
+		//TODO check if valid next value in keychain -> eigenlijk makkelijker om dit voor elke subject opnieuw te doen
+		//TODO in Java: prepare to be able to skip steps 4.1 and 4.2 (for demo, hardcode this?)
+		//TODO als je dit doet: zet hidra_succes boolean voor deze subject
+	}
+
+	int fd_write = cfs_open(filename, CFS_WRITE);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, cm_ind + 4, 8);
+		cfs_close(fd_write);
+		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	   printf("ERROR: could not write Kscm to memory.\n");
+	}
+
+	//TODO only in case of success(?)
+	current_subject->hid_cm_ind_success = 1;
+}
+
+static void
+construct_cm_ind_req(uint8_t *cm_ind_req) {
+	const char * filename = "properties";
+	//resource ID (2 bytes)
+	cm_ind_req[0] = 0;
+	cm_ind_req[1] = 2;
+	//Nonce3 (8 bytes)
+	uint16_t part_of_nonce = random_rand();
+	cm_ind_req[2] = (part_of_nonce >> 8);
+	cm_ind_req[3] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	cm_ind_req[4] = (part_of_nonce >> 8);
+	cm_ind_req[5] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	cm_ind_req[6] = (part_of_nonce >> 8);
+	cm_ind_req[7] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	cm_ind_req[8] = (part_of_nonce >> 8);
+	cm_ind_req[9] = part_of_nonce & 0xffff;
+
+	//Store Nonce3 for later use
+	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, cm_ind_req + 2, 8);
+		cfs_close(fd_write);
+		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	   printf("ERROR: could not write Kscm to memory.\n");
+	}
+
+	//Compute and fill MAC
+	//TODO
+}
+
 static void
 set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
-        uint16_t datalen,
-        int bit_index)
+        uint16_t datalen)
 {
-	uint8_t subject_id = get_char_from(bit_index, data);
-	bit_index += 8;
+	printf("Full HID_CM_IND message: \n")
+	full_phex(data, datalen);
+
+	printf("Resource id 2 == \n", data[0]);
+	uint8_t subject_id = data[1];
 
 	// If this is the first exchange with the ACS: extract subject id and policy
 	if (!is_already_associated(subject_id)) {
-		if (associated_subjects->nb_of_associated_subjects >= 10) {
-			printf("Oops, the number of associated subjects is currently set to 10.\n");
-		}
-		associated_subjects->nb_of_associated_subjects++;
-
-		struct associated_subject *current_subject = malloc(sizeof(struct associated_subject));
-		//TODO if (associated_subjects->subject_association_set != NULL) {} else handleAllocError();
-
-		associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects - 1] = current_subject;
-
-		current_subject->id = subject_id;
-		printf("new subject id : %d\n", current_subject->id);
-
-		// assign policy size - works as long as policy is last part of the message - this value might cause the copying of an unused zero-byte
-		current_subject->policy_size = datalen - (bit_index/8);
-		printf("new subject policy_size: %d\n", current_subject->policy_size);
-
-		// malloc policy range with right number of bytes
-		current_subject->policy = malloc(current_subject->policy_size * sizeof(uint8_t));
-
-		// copy policy to allocated memory
-		copy_policy(data,
-				bit_index,
-				current_subject->policy_size,
-				current_subject->policy);
-
-		// print policy, for debugging
-//		printf("Policy associated to subject %d : \n", subject_id);
-//		print_policy(current_subject->policy, 0);
-
-		char *response = "HID_CM_IND_REQ";
-		simple_udp_sendto(c, response, strlen(response), sender_addr);
-		current_subject->hid_cm_ind_success = 1;
+		process_cm_ind(subject_id, data, datalen);
 	}
-	else if (hid_cm_ind_success(subject_id)) { //TODO check if content of message checks out
-		set_hid_cm_ind_req_success(subject_id, 1);
+	else if (hid_cm_ind_success(subject_id)) { //TODO if steps 4.1 and 4.2 are not necessary, also set success + print this line
+//		process_cm_ind_rep(data, datalen); TODO
+		set_hid_cm_ind_req_success(subject_id, 1); //TODO hidra exchange success ipv ind_req. Die wordt nl. niet altijd gebruikt
 		printf("\n");
 		printf("End of Hidra exchange with ACS\n");
 	}
@@ -535,16 +644,16 @@ receiver_acs(struct simple_udp_connection *c,
 		  receiver_port, sender_port, datalen);
 //  printf("Data Rx: %.*s\n", datalen, data);
   printf("\n");
-
-  int bit_index = 1;
-  if (get_bit(0, data)) {
-	  if (is_already_associated(get_char_from(bit_index, data))) {
-		  handle_policy_update(c, sender_addr, data, datalen, bit_index);
+  printf("Subject id %d == 2, right?\n", data[2]);
+  //The first byte indicates the purpose of this message from the trusted server
+  if (data[0]) {
+	  if (is_already_associated(data[2])) {
+		  handle_policy_update(c, sender_addr, data+1, datalen-1, 0);
 	  } else {
 		  printf("Trying to update a policy of a non-associated subject. \n");
 	  }
   } else {
-	  set_up_hidra_association_with_acs(c, sender_addr, data, datalen, bit_index);
+	  set_up_hidra_association_with_acs(c, sender_addr, data+1, datalen-1);
   }
 }
 
@@ -1135,3 +1244,43 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 
 //END OF CODE FROM tiny AES PROJECT
 /////////////////////////////////////////
+
+//TODO possibly working hash to 32 bits
+uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
+{
+	uint32_t h = seed;
+	if (len > 3) {
+		const uint32_t* key_x4 = (const uint32_t*) key;
+		size_t i = len >> 2;
+		do {
+			uint32_t k = *key_x4++;
+			k *= 0xcc9e2d51;
+			k = (k << 15) | (k >> 17);
+			k *= 0x1b873593;
+			h ^= k;
+			h = (h << 13) | (h >> 19);
+			h = h * 5 + 0xe6546b64;
+		} while (--i);
+		key = (const uint8_t*) key_x4;
+	}
+	if (len & 3) {
+		size_t i = len & 3;
+		uint32_t k = 0;
+		key = &key[i - 1];
+		do {
+			k <<= 8;
+			k |= *key--;
+		} while (--i);
+		k *= 0xcc9e2d51;
+		k = (k << 15) | (k >> 17);
+		k *= 0x1b873593;
+		h ^= k;
+	}
+	h ^= len;
+	h ^= h >> 16;
+	h *= 0x85ebca6b;
+	h ^= h >> 13;
+	h *= 0xc2b2ae35;
+	h ^= h >> 16;
+	return h;
+}
