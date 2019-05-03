@@ -1,5 +1,7 @@
 #include "contiki.h"
 
+#include "lib/random.h"
+
 #include "net/ip/uip.h"
 #include "net/ipv6/uip-nd6.h"
 #include "net/ipv6/uip-ds6-route.h"
@@ -11,6 +13,8 @@
 #include "cfs/cfs.h"
 
 #include "tiny-AES-c/aes.h"
+
+#include "sha.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -27,6 +31,8 @@
 
 #define ACS_UDP_PORT 1234
 #define SUBJECT_UDP_PORT 1996
+
+uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
 
 static struct simple_udp_connection unicast_connection_acs;
 static struct simple_udp_connection unicast_connection_subject;
@@ -51,8 +57,8 @@ uint8_t resource_key[16] =
 
 uint8_t any_previous_key_chain_value_stored = 0;
 
-static void full_phex(uint8_t* str, uint8_t length);
-static void phex(uint8_t* str, uint8_t len);
+static void full_print_hex(uint8_t* str, uint8_t length);
+static void print_hex(uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
 void md5(uint8_t *initial_msg, size_t initial_len);
 
@@ -502,10 +508,10 @@ process_cm_ind(struct simple_udp_connection *c,
 	}
 //	const char * subject_filename = &subject_id; //TODO werkt een enkele uint8_t als file name? Cast naar char?
 	const char * filename = "properties";
-	printf("HID_CM_IND content:\n");
 	uint8_t cm_ind[62];
-	prinft("datalen 62 == %d\n", datalen);
+	printf("datalen 62 == %d\n", datalen);
 	memcpy(cm_ind, data, datalen);
+	printf("Full HID_CM_IND message: \n");
 	full_print_hex(cm_ind, sizeof(cm_ind));
 
 	if (associated_subjects->nb_of_associated_subjects >= 10) {
@@ -532,7 +538,7 @@ process_cm_ind(struct simple_udp_connection *c,
 	xcrypt_ctr(resource_key, cm_ind+29, current_subject->policy_size);
 
 	// copy decrypted policy to allocated memory
-	memcpy(current_subject->policy, cm_ind + 29); //TODO check!
+	memcpy(current_subject->policy, cm_ind + 29, current_subject->policy_size);
 
 	// print policy, for debugging
 	printf("Policy associated to subject %d : \n", subject_id);
@@ -557,7 +563,7 @@ process_cm_ind(struct simple_udp_connection *c,
 
 		//Request previous key chain value at credential manager
 		uint8_t response[14];
-		construct_cm__ind_req(response);
+		construct_cm_ind_req(response);
 		//Send message to credential manager
 		simple_udp_sendto(c, response, sizeof(response), sender_addr);
 
@@ -567,7 +573,7 @@ process_cm_ind(struct simple_udp_connection *c,
 		//TODO als je dit doet: zet hidra_succes boolean voor deze subject
 	}
 
-	int fd_write = cfs_open(filename, CFS_WRITE);
+	fd_write = cfs_open(filename, CFS_WRITE);
 	if(fd_write != -1) {
 		int n = cfs_write(fd_write, cm_ind + 4, 8);
 		cfs_close(fd_write);
@@ -587,10 +593,7 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uint8_t *data,
         uint16_t datalen)
 {
-	printf("Full HID_CM_IND message: \n")
-	full_phex(data, datalen);
-
-	printf("Resource id 2 == \n", data[0]);
+	printf("Resource id 2 == %d \n", data[0]);
 	uint8_t subject_id = data[1];
 
 	// If this is the first exchange with the ACS: extract subject id and policy
@@ -710,13 +713,33 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 	initialize_reference_table();
 
-	uint8_t hash[16];
-	memcpy(hash, resource_key, 16);
+	
+	uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
+						0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x51,
+						0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
+
+	printf("Vector: \n");
+	full_print_hex(text, 46);
+
 	printf("Key: \n");
-	full_phex(hash, 16);
-	md5(hash,16);
-	printf("Hashed key: \n");
-	full_phex(hash, 16);
+	full_print_hex(resource_key, 16);
+
+	//Size : USHAMaxHashSize
+	uint8_t digest[64];
+	//TODO process result code, should be 0
+	hmac (SHA1, text, sizeof(text), resource_key, 16, digest);
+//	printf("HMAC_SHA_1: \n"); //TODO door vol geheugen? Probeer te printen? Probeer string kleiner te maken?
+//	full_print_hex(digest, 20);
+
+//	uint32_t hashed = murmur3_32(digest + 44, 20, 17);
+//	uint8_t hashed_array[4];
+//	hashed_array[0] = (hashed >> 24) & 0xff;
+//	hashed_array[1] = (hashed >> 16) & 0xff;
+//	hashed_array[2] = (hashed >> 8)  & 0xff;
+//	hashed_array[3] = hashed & 0xff;
+//
+//	printf("Hashed HMAC_SHA_1: \n");
+//	full_print_hex(hashed_array, 4);
 
 	PROCESS_END();
 }
@@ -730,16 +753,16 @@ static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 	AES_CTR_xcrypt_buffer(&ctx, in, length);
 }
 
-static void full_phex(uint8_t* str, uint8_t length) {
+static void full_print_hex(uint8_t* str, uint8_t length) {
 	int i = 0;
 	for (; i < (length/16) ; i++) {
-		phex(str + i * 16, 16);
+		print_hex(str + i * 16, 16);
 	}
-	phex(str + i * 16, length%16);
+	print_hex(str + i * 16, length%16);
 }
 
 // prints string as hex
-static void phex(uint8_t* str, uint8_t len)
+static void print_hex(uint8_t* str, uint8_t len)
 {
     unsigned char i;
     for (i = 0; i < len; ++i)
@@ -1255,7 +1278,9 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 //END OF CODE FROM tiny AES PROJECT
 /////////////////////////////////////////
 
-//TODO possibly working hash to 32 bits
+//Hash to 32 bits from https://en.wikipedia.org/wiki/MurmurHash
+//TODO if it doesn't work, try https://github.com/PeterScott/murmur3/blob/master/murmur3.c
+//TODO doe seed = 17
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 {
 	uint32_t h = seed;
