@@ -4,3 +4,9 @@
 [submodule "tiny-AES-c"]
 	path = tiny-AES-c
 	url = https://github.com/kokke/tiny-AES-c.git
+[submodule "avr-crypto-lib"]
+	path = avr-crypto-lib
+	url = https://github.com/cantora/avr-crypto-lib.git
+[submodule "hmac-sha1"]
+	path = hmac-sha1
+	url = https://github.com/Akagi201/hmac-sha1.git

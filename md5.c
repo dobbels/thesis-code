@@ -177,37 +177,3 @@ void md5(uint8_t *initial_msg, size_t initial_len) {
     // cleanup
     free(msg);
 }
-
-int nain(int argc, char **argv) {
-
-    if (argc < 2) {
-        printf("usage: %s 'string'\n", argv[0]);
-        return 1;
-    }
-
-    char *msg = argv[1];
-    size_t len = strlen(msg);
-
-    // benchmark
-    // int i;
-    // for (i = 0; i < 1000000; i++) {
-        md5(msg, len);
-    // }
-
-    //var char digest[16] := h0 append h1 append h2 append h3 //(Output is in little-endian)
-    uint8_t *p;
-
-    p=(uint8_t *)&h0;
-	printf("%2.2x%2.2x%2.2x%2.2x", p[0], p[1], p[2], p[3], h0);
-
-	p=(uint8_t *)&h1;
-	printf("%2.2x%2.2x%2.2x%2.2x", p[0], p[1], p[2], p[3], h1);
-
-	p=(uint8_t *)&h2;
-	printf("%2.2x%2.2x%2.2x%2.2x", p[0], p[1], p[2], p[3], h2);
-
-	p=(uint8_t *)&h3;
-	printf("%2.2x%2.2x%2.2x%2.2x", p[0], p[1], p[2], p[3], h3);
-
-    return 0;
-}
