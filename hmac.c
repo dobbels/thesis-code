@@ -43,9 +43,15 @@ int
 hmac (SHAversion whichSha, const unsigned char *text, int text_len,
       const unsigned char *key, int key_len, uint8_t digest[USHAMaxHashSize])
 {
+	printf("text_len %d\n", key_len);
   HMACContext ctx;
-  return hmacReset (&ctx, whichSha, key, key_len) ||
-    hmacInput (&ctx, text, text_len) || hmacResult (&ctx, digest);
+  return
+		  hmacReset (&ctx, whichSha, key, key_len)
+		  ||
+		  hmacInput (&ctx, text, text_len)
+    	  ||
+		  hmacResult (&ctx, digest)
+		  ;
 }
 
 /*
@@ -222,14 +228,21 @@ hmacResult (HMACContext * ctx, uint8_t * digest)
 
   /* finish up 1st pass */
   /* (Use digest here as a temporary buffer.) */
-  return USHAResult (&ctx->shaContext, digest) ||
+//  return 0;
+  return
+		  USHAResult (&ctx->shaContext, digest)
+	||
     /* perform outer SHA */
     /* init context for 2nd pass */
-    USHAReset (&ctx->shaContext, ctx->whichSha) ||
+    USHAReset (&ctx->shaContext, ctx->whichSha)
+    ||
     /* start with outer pad */
-    USHAInput (&ctx->shaContext, ctx->k_opad, ctx->blockSize) ||
+    USHAInput (&ctx->shaContext, ctx->k_opad, ctx->blockSize)
+    ||
     /* then results of 1st hash */
-    USHAInput (&ctx->shaContext, digest, ctx->hashSize) ||
+    USHAInput (&ctx->shaContext, digest, ctx->hashSize)
+    ||
     /* finish up 2nd pass */
-    USHAResult (&ctx->shaContext, digest);
+    USHAResult (&ctx->shaContext, digest)
+    ;
 }

@@ -16,7 +16,7 @@
 
 #include "tiny-AES-c/aes.h"
 
-//#include "sha.h"
+#include "sha.h"
 
 //#include "avr-crypto-lib/hmac-sha1/hmac-sha1.h"
 
@@ -37,305 +37,6 @@
 
 //#include "hmac-sha1.h"
 
-
-//////////////////////////
-typedef unsigned char b8;
-typedef unsigned b32;
-
-int rpr (b32 * h) {
-  printf ("%08x%08x%08x%08x%08x\n", *h, *(h + 1), *(h + 2), *(h + 3),
-          *(h + 4));
-  return 0;
-}                     /* libpk */
-
-
-b8 *rd32be (b32 * n, b8 * msg) {
-  *n = *msg << 24;
-  ++msg;
-  *n |= *msg << 16;
-  ++msg;
-  *n |= *msg << 8;
-  ++msg;
-  *n |= *msg;
-  return ++msg;
-}                               /* libpk */
-
-    /* do this outside b32 h[5]={ 0x67452301, 0xefcdab89, 0x98badcfe, */
-    /* 0x10325476, 0xc3d2e1f0}; */
-
-typedef struct {
-  unsigned char *d;
-  unsigned l[2];
-} bitstr;
-
-
-typedef struct {
-  b32 h[5];
-  b32 l[2];
-} hsh;
-
-int hsh_rst (hsh * h) {
-
-  h->h[0] = 0x67452301;
-  h->h[1] = 0xefcdab89;
-  h->h[2] = 0x98badcfe;
-  h->h[3] = 0x10325476;
-  h->h[4] = 0xc3d2e1f0;
-  h->l[0] = 0;
-  h->l[1] = 0;
-
-  return 0;
-
-}
-
-int sha1_finish (bitstr * msg, hsh * h) {
-  bitstr p;
-
-  p = *msg;
-  while (p.l[1] || (p.l[0] >= 512)) {
-    sha1_nxt (p.d, 512, h);     /* FIXME check return value? */
-    p.d += 64;
-    if (p.l[0] < 512) {
-      if (p.l[1]) {
-        p.l[1]--;
-      }
-      else
-        return 1;               /* length underflow; FIXME redundant? */
-    }
-    p.l[0] -= 512;
-  }
-  sha1_end (p.d, p.l[0], h);    /* FIXME check return value? */
-  return 0;
-}
-
-int sha1 (bitstr * msg, hsh * h) {
-  int i;
-  bitstr p;
-
-  hsh_rst (h);
-  return sha1_finish (msg, h);
-}
-
-int sha1_nxt (b8 * msg, b32 bits, hsh * h) {
-  b32 w[80];
-  int i, j, b;
-
-  if (bits != 512)
-    return 1;                   /* bad length */
-  h->l[0] += bits;
-  if (h->l[0] < bits) {
-    h->l[1]++;
-    if (!(h->l[1]))
-      return 2;
-  }                             /* msg size overflow */
-  for (i = 0; i < 16; i++)
-    msg = rd32be (w + i, msg);
-  grind (w, h->h);
-  return 0;
-}
-
-
-int sha1_end (b8 * msg, b32 bits, hsh * h) {
-  b32 w[80];
-  int i = 0, j, b;
-  if (bits >= 512)
-    return 1;                   /* cant end with this chunk size */
-  if (bits) {                   /* do incomplete chunk */
-    h->l[0] += bits;
-    if (h->l[0] < bits) {
-      h->l[1]++;
-      if (!(h->l[1]))
-        return 2;
-    }                           /* msg size overflow */
-    if (j = bits / 32) {        /* do all complete words */
-      for (i = 0; i < j; i++)
-        msg = rd32be (w + i, msg);
-      bits %= 32;
-    }
-    b = bits;                   /* do final word */
-    w[i] = 1 << (31 - bits);
-    w[i] |= *msg << 24;
-    ++msg;
-    b -= 8;
-    if (b > 0) {
-      w[i] |= *msg << 16;
-      ++msg;
-      b -= 8;
-      if (b > 0) {
-        w[i] |= *msg << 8;
-        ++msg;
-        b -= 8;
-        if (b > 0) {
-          w[i] |= *msg;
-          ++msg;
-          b -= 8;
-        }
-      }
-    }
-    w[i] &= 0xffffffff << (31 - bits);
-    i++;
-    if (j >= 14) {
-      if (i == 15)
-        w[15] = 0;
-      grind (w, h->h);
-      i = 0;
-    }
-
-  }
-  else {                        /* add final chunk having length */
-    w[0] = 0x80000000;
-    i = 1;
-  }
-  for (; i < 14; i++)
-    w[i] = 0;                   /* fill with zero, leave 64 bits */
-  w[i] = h->l[1];
-  i++;
-  w[i] = h->l[0];               /* fill last 64 bits with length */
-  grind (w, h->h);
-  h->l[0] = 0;
-  h->l[1] = 0;
-  return 0;
-}
-
-b32 f (b32 t, b32 * a, b32 * w) {
-  b32 temp = 0;
-  b32 k[4] = { 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6 };
-  temp = ((a[0] << 5) | (a[0] >> 27)) + a[4] + w[t];
-  switch (t / 20) {
-  case 0:
-    temp += k[0];
-    temp += (a[1] & a[2]) | ((~a[1]) & a[3]);
-    break;
-  case 1:
-    temp += k[1];
-    temp += a[1] ^ a[2] ^ a[3];
-    break;
-  case 2:
-    temp += k[2];
-    temp += (a[1] & a[2]) | (a[1] & a[3]) | (a[2] & a[3]);
-    break;
-  case 3:
-    temp += k[3];
-    temp += a[1] ^ a[2] ^ a[3];
-    break;
-  }
-  return temp;
-}
-
-int grind (b32 * w, b32 * h) {
-  b32 t, temp;
-  b32 a[5];
-  for (t = 16; t < 80; t++) {
-    temp = w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16];
-    w[t] = (temp << 1) | (temp >> 31);
-  }
-  for (t = 0; t < 5; t++)
-    a[t] = h[t];
-  for (t = 0; t < 80; t++) {
-    temp = f (t, a, w);
-    a[4] = a[3];
-    a[3] = a[2];
-    a[2] = (a[1] << 30) | (a[1] >> 2);
-    a[1] = a[0];
-    a[0] = temp;
-  }
-  for (t = 0; t < 5; t++)
-    h[t] += a[t];
-  return 0;
-}
-
-
-/* rfc3174
-it all boiled down to reading big endian numbers correctly ;)
-and realizing the you are not writing anything in big endian form :P
-Wed Jul 16 00:32:21 IST 2014
-*/
-
-
-b8 *wr32be (b32 n, b8 * msg) {
-  b32 mask = 0xff;
-  *msg = n >> 24;
-  ++msg;
-  *msg = (n >> 16) & mask;
-  ++msg;
-  *msg = (n >> 8) & mask;
-  ++msg;
-  *msg = n & mask;
-  return ++msg;
-}                               /* libpk */
-
-int hmac_sha1 (bitstr * key, bitstr * msg, unsigned mac[5]) {
-  unsigned k[16] = { 0 };
-  unsigned o[16], i[16];
-  unsigned x;
-  hsh h, fin;
-
-
-  if (key->l[1] || key->l[0] > 512) {
-    sha1 (key, &h);
-    for (x = 0; x < 5; x++)
-      wr32be (h.h[x], k + x);   /* FIXME: if wr32be works not */
-  }
-  else
-    memcpy (k, key->d, key->l[0] / 8 + (key->l[0] % 8 && 1));
-
-  for (x = 0; x < 16; x++) {
-    o[x] = 0x5c5c5c5c ^ k[x];
-    i[x] = 0x36363636 ^ k[x];
-  }
-
-
-  hsh_rst (&h);
-  sha1_nxt (i, 512, &h);
-  sha1_finish (msg, &h);
-  for (x = 0; x < 5; x++)
-    wr32be (h.h[x], h.h + x);   /* FIXME: if wr32be works not */
-  hsh_rst (&fin);
-  sha1_nxt (o, 512, &fin);
-  sha1_end (h.h, 160, &fin);
-
-  for (x = 0; x < 5; x++)
-    mac[x] = fin.h[x];
-  return 0;
-
-}
-
-int test_hmac_sha1 (int argc, char **argv) {
-  b32 hash[5];
-  char *msg = "hi";
-  char *key = "hi";
-  bitstr m;
-  bitstr k;
-
-  if (argc>1) {
-    msg = argv[1];
-    key = argv[1];
-  }
-  if (argc>2) {
-    key = argv[2];
-  }
-
-  m.d = msg;
-  m.l[0] = 8*strlen(msg);
-  m.l[1] = 0;
-
-  k.d = key;
-  k.l[0] = 8*strlen(key);
-  k.l[1] = 0;
-
-  hmac_sha1 (&k, &m, hash);
-  rpr (hash);
-  return 0;
-}
-/////////////////////////////:
-
-
-
-
-
-
-
-
 #define ACS_UDP_PORT 1234
 #define SUBJECT_UDP_PORT 1996
 
@@ -346,11 +47,15 @@ static struct simple_udp_connection unicast_connection_subject;
 
 uip_ipaddr_t resource_addr;
 
-uint8_t resource_key[16] =
+const uint8_t resource_key[16] =
 	{ (uint8_t) 0x2b, (uint8_t) 0x7e, (uint8_t) 0x15, (uint8_t) 0x16,
 		(uint8_t) 0x28, (uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x2b,
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
 		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
+
+const uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
+						0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x51,
+						0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
 
 //Subject-specific file structure is a concatenation of:
 //NonceSR
@@ -1020,44 +725,43 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 	initialize_reference_table();
 
-	test_hmac_sha1(0, NULL);
-
-	uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
-						0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x51,
-						0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
-
 	printf("Vector: \n");
-	full_print_hex(text, 46);
+	full_print_hex(text, sizeof(text));
 
 	printf("Key: \n");
-	full_print_hex(resource_key, 16);
+	full_print_hex(resource_key, sizeof(resource_key));
 
-	uint8_t digest[20];
+//	uint8_t digest[20];
 
-	//TODO belangrijk: verwacht een const!! Net als die andere functies. Dat kan voor al die problemen zorgen! -> eigen test code negeert die const?!
-//	hmac_sha1(resource_key,   /* secret key */
-//			sizeof(resource_key),  /* length of the key in bytes */
-//	        text,   /* data */
-//	        sizeof(text),  /* length of data in bytes */
-//	        digest, /* output buffer, at least "t" bytes */
-//	        20);
+	///////////////////////////////
+//	uint32_t hash[5];
+////	char *msg = "hi";
+////	char *key = "hi";
+//	bitstr m;
+//	bitstr k;
+//
+//	m.d = text;
+//	m.l[0] = 8*sizeof(text);
+//	m.l[1] = 0;
+//
+//	k.d = resource_key;
+//	k.l[0] = 8*sizeof(resource_key);
+//	k.l[1] = 0;
+//
+//	hmac_sha1 (&k, &m, hash);
+//	printf("hash after \n");
+//	full_print_hex(hash, 20);
 
-	/*
-	 * keylength in bits!
-	 * message length in bits!
-	 */
-//	hmac_sha1(digest, resource_key, 16*8, text, 46*8);
+	 ////////////////////////////////
+
 
 //	//Size : USHAMaxHashSize
-//	uint8_t digest[64];
+	uint8_t digest[USHAMaxHashSize];
 //	//TODO process result code, should be 0
-////	hmac (SHA1, text, sizeof(text), resource_key, 16, digest);
-//	printf("HMAC_SHA_1: \n"); //TODO door vol geheugen? Probeer te printen? Probeer string kleiner te maken?
-//	//TODO I used to get this type of an error when I was using malloc of C.
-//	//Then I realized I had to use the malloc of Contiki and the error was resolved. So
-//	//just in case I would recommend you to check your code.
+	hmac (SHA1, text, sizeof(text), resource_key, sizeof(resource_key), digest);
+	//TODO malloc might be the problem, according to internet
 
-
+	printf("HMAC_SHA_1: \n");
 	full_print_hex(digest, 20);
 
 	uint32_t hashed = murmur3_32(digest, 20, 17);
@@ -1069,6 +773,10 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 	printf("Hashed HMAC_SHA_1: \n");
 	full_print_hex(hashed_array, 4);
+
+	while(1) {
+//			PROCESS_WAIT_EVENT(); //TODO stond dit hier vroeger ook?
+		}
 
 	PROCESS_END();
 }
@@ -1083,11 +791,13 @@ static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 }
 
 static void full_print_hex(uint8_t* str, uint8_t length) {
+	printf("********************************\n");
 	int i = 0;
 	for (; i < (length/16) ; i++) {
 		print_hex(str + i * 16, 16);
 	}
 	print_hex(str + i * 16, length%16);
+	printf("********************************\n");
 }
 
 // prints string as hex
@@ -1237,7 +947,7 @@ static uint8_t getSBoxInvert(uint8_t num)
 // This function produces Nb(Nr+1) round keys. The round keys are used in each round to decrypt the states. 
 static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)
 {
-  unsigned i, j, k;
+  unsigned i, j, k; //TODO warning: unsigned means unsigned int, but that has 2 bytes on Z1, with msp430-gcc, vs 4 bytes on other compilers
   uint8_t tempa[4]; // Used for the column/row operations
   
   // The first round key is the key itself.
@@ -1648,3 +1358,259 @@ uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 	h ^= h >> 16;
 	return h;
 }
+
+/////////////////////////TODO verwijder
+//////////////////////////
+
+
+uint8_t *rd32be (uint32_t * n, uint8_t * msg) {
+  *n = *msg << 24;
+  ++msg;
+  *n |= *msg << 16;
+  ++msg;
+  *n |= *msg << 8;
+  ++msg;
+  *n |= *msg;
+  return ++msg;
+}                               /* libpk */
+
+    /* do this outside b32 h[5]={ 0x67452301, 0xefcdab89, 0x98badcfe, */
+    /* 0x10325476, 0xc3d2e1f0}; */
+
+typedef struct {
+  unsigned char *d;
+  uint32_t l[2];
+} bitstr;
+
+
+typedef struct {
+  uint32_t h[5];
+  uint32_t l[2];
+} hsh;
+
+int hsh_rst (hsh * h) {
+
+  h->h[0] = 0x67452301;
+  h->h[1] = 0xefcdab89;
+  h->h[2] = 0x98badcfe;
+  h->h[3] = 0x10325476;
+  h->h[4] = 0xc3d2e1f0;
+  h->l[0] = 0;
+  h->l[1] = 0;
+
+  return 0;
+
+}
+
+int sha1_nxt (uint8_t * msg, uint32_t bits, hsh * h) {
+  uint32_t w[80];
+  int i, j, b;
+
+  if (bits != 512)
+    return 1;                   /* bad length */
+  h->l[0] += bits;
+  if (h->l[0] < bits) {
+    h->l[1]++;
+    if (!(h->l[1]))
+      return 2;
+  }                             /* msg size overflow */
+  for (i = 0; i < 16; i++)
+    msg = rd32be (w + i, msg);
+  grind (w, h->h);
+  return 0;
+}
+
+int sha1_end (uint8_t * msg, uint32_t bits, hsh * h) {
+  uint32_t w[80];
+  int i = 0, j, b;
+  if (bits >= 512)
+    return 1;                   /* cant end with this chunk size */
+  if (bits) {                   /* do incomplete chunk */
+    h->l[0] += bits;
+    if (h->l[0] < bits) {
+      h->l[1]++;
+      if (!(h->l[1]))
+        return 2;
+    }                           /* msg size overflow */
+    if (j = bits / 32) {        /* do all complete words */
+      for (i = 0; i < j; i++)
+        msg = rd32be (w + i, msg);
+      bits %= 32;
+    }
+    b = bits;                   /* do final word */
+    w[i] = 1 << (31 - bits);
+    w[i] |= *msg << 24;
+    ++msg;
+    b -= 8;
+    if (b > 0) {
+      w[i] |= *msg << 16;
+      ++msg;
+      b -= 8;
+      if (b > 0) {
+        w[i] |= *msg << 8;
+        ++msg;
+        b -= 8;
+        if (b > 0) {
+          w[i] |= *msg;
+          ++msg;
+          b -= 8;
+        }
+      }
+    }
+    w[i] &= 0xffffffff << (31 - bits);
+    i++;
+    if (j >= 14) {
+      if (i == 15)
+        w[15] = 0;
+      grind (w, h->h);
+      i = 0;
+    }
+
+  }
+  else {                        /* add final chunk having length */
+    w[0] = 0x80000000;
+    i = 1;
+  }
+  for (; i < 14; i++)
+    w[i] = 0;                   /* fill with zero, leave 64 bits */
+  w[i] = h->l[1];
+  i++;
+  w[i] = h->l[0];               /* fill last 64 bits with length */
+  grind (w, h->h);
+  h->l[0] = 0;
+  h->l[1] = 0;
+  return 0;
+}
+
+int sha1_finish (bitstr * msg, hsh * h) {
+  bitstr p;
+
+  p = *msg;
+  while (p.l[1] || (p.l[0] >= 512)) {
+    sha1_nxt (p.d, 512, h);     /* FIXME check return value? */
+    p.d += 64;
+    if (p.l[0] < 512) {
+      if (p.l[1]) {
+        p.l[1]--;
+      }
+      else
+        return 1;               /* length underflow; FIXME redundant? */
+    }
+    p.l[0] -= 512;
+  }
+  sha1_end (p.d, p.l[0], h);    /* FIXME check return value? */
+  return 0;
+}
+
+int sha1 (bitstr * msg, hsh * h) {
+  int i;
+  bitstr p;
+
+  hsh_rst (h);
+  return sha1_finish (msg, h);
+}
+
+uint32_t f (uint32_t t, uint32_t * a, uint32_t * w) {
+  uint32_t temp = 0;
+  uint32_t k[4] = { 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6 };
+  temp = ((a[0] << 5) | (a[0] >> 27)) + a[4] + w[t];
+  switch (t / 20) {
+  case 0:
+    temp += k[0];
+    temp += (a[1] & a[2]) | ((~a[1]) & a[3]);
+    break;
+  case 1:
+    temp += k[1];
+    temp += a[1] ^ a[2] ^ a[3];
+    break;
+  case 2:
+    temp += k[2];
+    temp += (a[1] & a[2]) | (a[1] & a[3]) | (a[2] & a[3]);
+    break;
+  case 3:
+    temp += k[3];
+    temp += a[1] ^ a[2] ^ a[3];
+    break;
+  }
+  return temp;
+}
+
+int grind (uint32_t * w, uint32_t * h) {
+  uint32_t t, temp;
+  uint32_t a[5];
+  for (t = 16; t < 80; t++) {
+    temp = w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16];
+    w[t] = (temp << 1) | (temp >> 31);
+  }
+  for (t = 0; t < 5; t++)
+    a[t] = h[t];
+  for (t = 0; t < 80; t++) {
+    temp = f (t, a, w);
+    a[4] = a[3];
+    a[3] = a[2];
+    a[2] = (a[1] << 30) | (a[1] >> 2);
+    a[1] = a[0];
+    a[0] = temp;
+  }
+  for (t = 0; t < 5; t++)
+    h[t] += a[t];
+  return 0;
+}
+
+
+/* rfc3174
+it all boiled down to reading big endian numbers correctly ;)
+and realizing the you are not writing anything in big endian form :P
+Wed Jul 16 00:32:21 IST 2014
+*/
+
+
+uint8_t *wr32be (uint32_t n, uint8_t * msg) {
+  uint32_t mask = 0xff;
+  *msg = n >> 24;
+  ++msg;
+  *msg = (n >> 16) & mask;
+  ++msg;
+  *msg = (n >> 8) & mask;
+  ++msg;
+  *msg = n & mask;
+  return ++msg;
+}                               /* libpk */
+
+int hmac_sha1 (bitstr * key, bitstr * msg, uint32_t mac[5]) {
+  uint32_t k[16] = { 0 };
+  uint32_t o[16], i[16];
+  uint32_t x;
+  hsh h, fin;
+
+
+  if (key->l[1] || key->l[0] > 512) {
+    sha1 (key, &h);
+    for (x = 0; x < 5; x++)
+      wr32be (h.h[x], k + x);   /* FIXME: if wr32be works not */
+  }
+  else
+    memcpy (k, key->d, key->l[0] / 8 + (key->l[0] % 8 && 1));
+
+  for (x = 0; x < 16; x++) {
+    o[x] = 0x5c5c5c5c ^ k[x];
+    i[x] = 0x36363636 ^ k[x];
+  }
+
+
+  hsh_rst (&h);
+  sha1_nxt (i, 512, &h);
+  sha1_finish (msg, &h);
+  for (x = 0; x < 5; x++)
+    wr32be (h.h[x], h.h + x);   /* FIXME: if wr32be works not */
+  hsh_rst (&fin);
+  sha1_nxt (o, 512, &fin);
+  sha1_end (h.h, 160, &fin);
+
+  for (x = 0; x < 5; x++)
+    mac[x] = fin.h[x];
+  return 0;
+
+}
+
+/////////////////////////////:
