@@ -176,8 +176,5 @@ uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_le
 		printf("4: %2.2x%2.2x%2.2x%2.2x\n", p[0], p[1], p[2], p[3]);
 		return 0;
 	}
-
-    // cleanup
-    free(msg);
     return 1;
 }
