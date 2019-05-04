@@ -189,6 +189,7 @@ construct_cm_req(uint8_t *cm_req) {
 	}
 	//Generate AuthNM and add to byte array
 	//IDs
+	cm_req[37] = 0;
 	cm_req[38] = subject_id;
 	//Noncescm + i, with i = 1
 	uint8_t i = 1;

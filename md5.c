@@ -14,10 +14,9 @@
 // These vars will contain the hash
 uint32_t h0, h1, h2, h3;
 
-void md5(uint8_t *initial_msg, size_t initial_len) {
+uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_len) {
 
-    // Message (to prepare)
-    uint8_t *msg = NULL;
+
 
     // Note: All variables are unsigned 32 bit and wrap modulo 2^32 when calculating
 
@@ -65,8 +64,8 @@ void md5(uint8_t *initial_msg, size_t initial_len) {
     for(new_len = initial_len*8 + 1; new_len%512!=448; new_len++);
     new_len /= 8;
 
-    msg = malloc(new_len + 64); // also appends "0" bits
-                                // (we alloc also 64 extra bytes...)
+    // Message (to prepare)
+	uint8_t msg[new_len+64];
     memset(msg,0,new_len + 64);
 
     memcpy(msg, initial_msg, initial_len);
@@ -155,25 +154,30 @@ void md5(uint8_t *initial_msg, size_t initial_len) {
 
 	p=(uint8_t *)&h0;
     int i = 0;
-    for(i = 0;i<4;i++) {
-    	*(initial_msg + i) = p[i];
-    }
+	if (0 != memcmp((uint8_t *) next, (uint8_t *) p, 4)) {
+		printf("1: %2.2x%2.2x%2.2x%2.2x\n", p[0], p[1], p[2], p[3]);
+		return 0;
+	}
 
 	p=(uint8_t *)&h1;
-    for(i = 0;i<4;i++) {
-		*(initial_msg + 4 + i) = p[i];
+	if (0 != memcmp((uint8_t *) (next+4), (uint8_t *) p, 4)) {
+		printf("2: %2.2x%2.2x%2.2x%2.2x\n", p[0], p[1], p[2], p[3]);
+		return 0;
 	}
 
 	p=(uint8_t *)&h2;
-    for(i = 0;i<4;i++) {
-		*(initial_msg + 8 + i) = p[i];
+	if (0 != memcmp((uint8_t *) (next+8), (uint8_t *) p, 4)) {
+		printf("3: %2.2x%2.2x%2.2x%2.2x\n", p[0], p[1], p[2], p[3]);
+		return 0;
 	}
 
 	p=(uint8_t *)&h3;
-    for(i = 0;i<4;i++) {
-		*(initial_msg + 12 + i) = p[i];
+	if (0 != memcmp((uint8_t *) (next+12), (uint8_t *) p, 4)) {
+		printf("4: %2.2x%2.2x%2.2x%2.2x\n", p[0], p[1], p[2], p[3]);
+		return 0;
 	}
 
     // cleanup
     free(msg);
+    return 1;
 }

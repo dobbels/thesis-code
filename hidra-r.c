@@ -8,19 +8,14 @@
 #include "net/ipv6/uip-ds6-nbr.h"
 #include "net/ipv6/uip-ds6.h"
 #include "dev/leds.h"
+#include "dev/button-sensor.h"
 #include "simple-udp.h"
-
-#include "assert.h"//TODO delete
 
 #include "cfs/cfs.h"
 
 #include "tiny-AES-c/aes.h"
 
 #include "sha.h"
-
-//#include "avr-crypto-lib/hmac-sha1/hmac-sha1.h"
-
-//#include "hmac-sha1/src/hmac/hmac.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -41,6 +36,7 @@
 #define SUBJECT_UDP_PORT 1996
 
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
+uint8_t same_mac(uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes);
 
 static struct simple_udp_connection unicast_connection_acs;
 static struct simple_udp_connection unicast_connection_subject;
@@ -53,26 +49,20 @@ const uint8_t resource_key[16] =
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
 		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
 
-const uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
-						0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x51,
-						0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
-
-//Subject-specific file structure is a concatenation of:
-//NonceSR
-#define nonce_s_r_offset 0;
-
 //General file structure is a concatenation of:
 //Current last one-way key chain value Kr,cm
-#define k_i_r_cm_offset 0;
+uint8_t k_i_r_cm_offset = 0;
+//Pending subject number
+uint8_t sub_offset = 16;
 //Nonce3
-#define nonce3_offset (k_i_r_cm_offset + 16);
+uint8_t nonce3_offset = 17;
 
 uint8_t any_previous_key_chain_value_stored = 0;
 
 static void full_print_hex(uint8_t* str, uint8_t length);
 static void print_hex(uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
-void md5(uint8_t *initial_msg, size_t initial_len);
+uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_len);
 
 //struct policy policy;
 struct associated_subjects *associated_subjects;
@@ -266,6 +256,32 @@ hid_s_r_req_success(uint8_t id)
 }
 
 static void
+set_fresh_information(uint8_t subject_id, uint8_t bit)
+{
+	int subject_index = 0;
+	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id) {
+			associated_subjects->subject_association_set[subject_index]->fresh_information = bit;
+		}
+	}
+}
+
+static uint8_t
+fresh_information(uint8_t subject_id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id &&
+				associated_subjects->subject_association_set[subject_index]->fresh_information) {
+			result = 1;
+		}
+	}
+	return result;
+}
+
+static void
 set_hid_cm_ind_req_success(uint8_t subject_id, uint8_t bit)
 {
 	int subject_index = 0;
@@ -452,7 +468,7 @@ receiver_subject(struct simple_udp_connection *c,
   uint8_t subject_id = get_char_from(bit_index, data);
   bit_index += 8;
 
-  if (is_already_associated(subject_id) && !hid_s_r_req_success(subject_id) && hid_cm_ind_req_success(subject_id)) {
+  if (is_already_associated(subject_id) && !hid_s_r_req_success(subject_id) && hid_cm_ind_success(subject_id) && fresh_information(subject_id)) {
 	  handle_subject_access_request(c, sender_addr, data, datalen, subject_id, bit_index);
   } else {
 	  printf("Request denied, because no association with this subject exists.\n");
@@ -480,6 +496,8 @@ construct_cm_ind_req(uint8_t *cm_ind_req) {
 	cm_ind_req[8] = (part_of_nonce >> 8);
 	cm_ind_req[9] = part_of_nonce & 0xffff;
 
+	printf("Nonce3: \n");
+	full_print_hex(cm_ind_req+2, 8);
 	//Store Nonce3 for later use
 	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
 	if(fd_write != -1) {
@@ -488,20 +506,24 @@ construct_cm_ind_req(uint8_t *cm_ind_req) {
 		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
 		printf("\n");
 	} else {
-	   printf("ERROR: could not write Kscm to memory.\n");
+	   printf("ERROR: could not write Nonce3 to memory.\n");
 	}
 
 	//Compute and fill MAC
-	//TODO
+	uint8_t array_with_key[20];
+	memcpy(array_with_key, resource_key, 16);
+	memcpy(array_with_key + 16, cm_ind_req, 4);
+	//Differences between murmur3 implementations => always take the first 20 bytes as a comparison for now.
+	uint32_t hashed = murmur3_32(array_with_key, 20, 17);
+
+	cm_ind_req[10] = (hashed >> 24) & 0xff;
+	cm_ind_req[11] = (hashed >> 16) & 0xff;
+	cm_ind_req[12] = (hashed >> 8)  & 0xff;
+	cm_ind_req[13] = hashed & 0xff;
+
+	printf("Resulting hash: \n");
+	full_print_hex(cm_ind_req+10, 4);
 }
-
-// TODO more realistic file per subject
-//problem: filename based on subject id and this gave errors earlier. try to assign in one line const char * filename = "properties" + subject_id;, you get the idea
-// => TODO voeg filename toe aan subject struct
-//	+ schrijf functie om die makkelijk te getten
-//	+ gebruik https://codereview.stackexchange.com/questions/29198/random-string-generator-in-c om filename te genereren
-//		=> als dat niet werkt, hardcode dan voor demo
-
 
 static void
 process_cm_ind(struct simple_udp_connection *c,
@@ -509,94 +531,176 @@ process_cm_ind(struct simple_udp_connection *c,
 		uint8_t subject_id,
 		const uint8_t *data,
 		uint16_t datalen) {
-	const char * subject_filename;
-	//TODO PoC to PoC -> dit mag wat minder lelijk, maar is niet noodzakelijk. Je kan altijd pseudo code zetten en alleen belangrijkste code in bijlage
-	if (subject_id == 3) {
-		subject_filename = "properties3"; //TODO super illegaal?
-	} else if (subject_id == 4) {
-		subject_filename = "properties4";
-	} else {
-		subject_filename = "properties5";
-	}
-//	const char * subject_filename = &subject_id; //TODO werkt een enkele uint8_t als file name? Cast naar char?
 	const char * filename = "properties";
-	uint8_t cm_ind[62];
-	printf("datalen 62 == %d\n", datalen);
+	uint8_t cm_ind[datalen];
+	printf("datalen %d, so policy is of length %d\n", datalen, datalen - 33);
 	memcpy(cm_ind, data, datalen);
 	printf("Full HID_CM_IND message: \n");
 	full_print_hex(cm_ind, sizeof(cm_ind));
 
-	if (associated_subjects->nb_of_associated_subjects >= 10) {
-		printf("Oops, the number of associated subjects is currently set to 10.\n");
-	}
-	associated_subjects->nb_of_associated_subjects++;
 
-	struct associated_subject *current_subject = malloc(sizeof(struct associated_subject));
-	//TODO if (associated_subjects->subject_association_set != NULL) {} else handleAllocError();
+	if(same_mac(cm_ind + datalen - 4, cm_ind + 2, datalen - 6)) {
+		if (associated_subjects->nb_of_associated_subjects >= 10) {
+			printf("Oops, the number of associated subjects is currently set to 10.\n");
+		}
+		associated_subjects->nb_of_associated_subjects++;
 
-	associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects - 1] = current_subject;
+		struct associated_subject *current_subject = malloc(sizeof(struct associated_subject));
+		//TODO if (associated_subjects->subject_association_set != NULL) {} else handleAllocError();
 
-	current_subject->id = subject_id;
-	printf("new subject id : %d\n", current_subject->id);
+		associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects - 1] = current_subject;
 
-	// assign policy size based on knowledge about the rest of the message
-	current_subject->policy_size = datalen - 33;
-	printf("new subject policy_size: %d\n", current_subject->policy_size);
+		current_subject->id = subject_id;
+		printf("new subject id : %d\n", current_subject->id);
 
-	// malloc policy range with right number of bytes
-	current_subject->policy = malloc(current_subject->policy_size * sizeof(uint8_t));
+		// assign policy size based on knowledge about the rest of the message
+		current_subject->policy_size = datalen - 33;
+		printf("new subject policy_size: %d\n", current_subject->policy_size);
 
-	// decrypt policy before storage
-	xcrypt_ctr(resource_key, cm_ind+29, current_subject->policy_size);
+		// malloc policy range with right number of bytes
+		current_subject->policy = malloc(current_subject->policy_size * sizeof(uint8_t));
 
-	// copy decrypted policy to allocated memory
-	memcpy(current_subject->policy, cm_ind + 29, current_subject->policy_size);
+		// decrypt policy before storage
+		xcrypt_ctr(resource_key, cm_ind + 29, current_subject->policy_size);
 
-	// print policy, for debugging
-	printf("Policy associated to subject %d : \n", subject_id);
-	print_policy(current_subject->policy, 0);
+		// copy decrypted policy to allocated memory
+		memcpy(current_subject->policy, cm_ind + 29, current_subject->policy_size);
 
-	//Ignore lifetime value
+		// print policy, for debugging
+		printf("Policy associated to subject %d : \n", subject_id);
+		print_policy(current_subject->policy, 0);
 
-	//Store NonceSR in file system
-	int fd_write = cfs_open(subject_filename, CFS_WRITE);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, cm_ind + 4, 8);
-		cfs_close(fd_write);
-		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
-		printf("\n");
+		//Ignore lifetime value
+
+		//Store NonceSR for this subject
+		current_subject->nonceSR = malloc(sizeof(uint8_t) * 8);
+		memcpy(current_subject->nonceSR, cm_ind + 4, 8);
+		printf("NonceSR: %d\n", current_subject->policy_size);
+		full_print_hex(current_subject->nonceSR, 8);
+
+		if (!any_previous_key_chain_value_stored) {
+			any_previous_key_chain_value_stored = 1; //=> on requests from next subjects, to do or not to do?
+			current_subject->fresh_information = 0;
+
+
+			printf("Kircm: \n");
+			full_print_hex(cm_ind + 13, 16);
+			//Write this value to file system
+			int fd_write = cfs_open(filename, CFS_WRITE);
+			if(fd_write != -1) {
+				int n = cfs_write(fd_write, cm_ind + 13, 16);
+				cfs_close(fd_write);
+				printf("Successfully written Kircm (%i bytes) to %s\n", n, filename);
+				printf("\n");
+			} else {
+			   printf("ERROR: could not write Kircm to memory.\n");
+			}
+
+			//Write subject id to file system to update freshness later on
+			fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+			if(fd_write != -1) {
+				int n = cfs_write(fd_write, &subject_id, 1);
+				cfs_close(fd_write);
+				printf("Successfully written subject id (%i bytes) to %s\n", n, filename);
+				printf("\n");
+			} else {
+			   printf("ERROR: could not write subject id to memory.\n");
+			}
+
+			//Request previous key chain value at credential manager
+			uint8_t response[14];
+			construct_cm_ind_req(response);
+			//Send message to credential manager
+			simple_udp_sendto(c, response, sizeof(response), sender_addr);
+
+		} else {
+
+			//This is not handled in the demo
+			printf("Error: key chain value shouldn't exist\n");
+
+		}
+
+
+		//TODO only in case of success(?)
+		current_subject->hid_cm_ind_success = 1;
 	} else {
-	   printf("ERROR: could not write Kscm to memory.\n");
+		printf("Incorrect MAC code\n");
 	}
+}
 
-	//Store key chain value in file system
-	if (!any_previous_key_chain_value_stored) {
-		any_previous_key_chain_value_stored = 1; //=> on requests from next subjects, to do or not to do?
+static void
+process_cm_ind_rep(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+		uint16_t datalen) {
+	const char * filename = "properties";
+	printf("datalen %d == 22?\n", datalen);
+	printf("Full HID_CM_IND_REP message: \n");
+	full_print_hex(data, datalen);
 
-		//Request previous key chain value at credential manager
-		uint8_t response[14];
-		construct_cm_ind_req(response);
-		//Send message to credential manager
-		simple_udp_sendto(c, response, sizeof(response), sender_addr);
+	// MAC calculation
+	uint8_t for_mac[4];
+	memcpy(for_mac, data, 2);
+	//Get nonce 3 from storage
+	int fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+	   cfs_seek(fd_read, nonce3_offset, CFS_SEEK_SET);
+	   cfs_read(fd_read, for_mac + 2, 2);
+	   cfs_close(fd_read);
+	 } else {
+	   printf("ERROR: could not read nonce from memory.\n");
+	 }
 
+	if(same_mac(data + 18, for_mac, 4)) {
+		//Check key chain value with stored value
+		uint8_t new_key[16];
+		memcpy(new_key, data + 2, 16);
+		uint8_t old_key[16];
+		fd_read = cfs_open(filename, CFS_READ);
+		if(fd_read!=-1) {
+		  cfs_read(fd_read, old_key, 16);
+		  cfs_close(fd_read);
+		} else {
+		  printf("ERROR: could not read nonce from memory.\n");
+		}
+
+		printf("new_key: \n");
+		full_print_hex(new_key, 16);
+		printf("old_key: \n");
+		full_print_hex(old_key, 16);
+
+		if (is_next_in_chain(old_key, new_key, 16)) {
+			//Get pending subject number for file system and update freshness
+			uint8_t subject_id;
+			fd_read = cfs_open(filename, CFS_READ);
+			if(fd_read!=-1) {
+				cfs_seek(fd_read, sub_offset, CFS_SEEK_SET);
+				cfs_read(fd_read, &subject_id, 1);
+				cfs_close(fd_read);
+				printf("Setting freshness of subject %d\n", subject_id);
+				set_fresh_information(subject_id, 1);
+				uint8_t response = 1;
+				simple_udp_sendto(c, &response, 1, sender_addr);
+
+			} else {
+				uint8_t response = 0;
+				simple_udp_sendto(c, &response, 1, sender_addr);
+				printf("ERROR: could not read subect id from memory.\n");
+			}
+		} else {
+			uint8_t response = 0;
+			simple_udp_sendto(c, &response, 1, sender_addr);
+			printf("Error: Not a correct key, therefore subject information is not fresh \n");
+		}
 	} else {
-		//TODO check if valid next value in keychain -> eigenlijk makkelijker om dit voor elke subject opnieuw te doen
-		//TODO in Java: prepare to be able to skip steps 4.1 and 4.2 (for demo, hardcode this?)
-		//TODO als je dit doet: zet hidra_succes boolean voor deze subject
+		uint8_t response = 0;
+		simple_udp_sendto(c, &response, 1, sender_addr);
+		printf("Incorrect MAC code\n");
 	}
 
-	fd_write = cfs_open(filename, CFS_WRITE);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, cm_ind + 4, 8);
-		cfs_close(fd_write);
-		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
-		printf("\n");
-	} else {
-	   printf("ERROR: could not write Kscm to memory.\n");
-	}
-
-	//TODO only in case of success(?)
-	current_subject->hid_cm_ind_success = 1;
+	//Clean up for next demo association (as it is at the moment)
+	any_previous_key_chain_value_stored = 0;
+	cfs_remove(filename);
 }
 
 static void
@@ -605,18 +709,21 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uint8_t *data,
         uint16_t datalen)
 {
-	printf("Resource id 2 == %d \n", data[0]);
-	uint8_t subject_id = data[1];
+	printf("Resource id 2 == %d \n", data[1]);
+
+	if (datalen < 33) {
+		process_cm_ind_rep(c, sender_addr, data, datalen);
+		printf("\n");
+		printf("End of Hidra exchange with ACS\n");
+		return;
+	}
+
+	printf("Subject id 3 == %d \n", data[3]);
+	uint8_t subject_id = data[3];
 
 	// If this is the first exchange with the ACS: extract subject id and policy
 	if (!is_already_associated(subject_id)) {
 		process_cm_ind(c, sender_addr, subject_id, data, datalen);
-	}
-	else if (hid_cm_ind_success(subject_id)) { //TODO if steps 4.1 and 4.2 are not necessary, also set success + print this line
-//		process_cm_ind_rep(data, datalen); TODO
-		set_hid_cm_ind_req_success(subject_id, 1); //TODO hidra exchange success ipv ind_req. Die wordt nl. niet altijd gebruikt
-		printf("\n");
-		printf("End of Hidra exchange with ACS\n");
 	}
 	else {
 		printf("Did not receive from ACS what was expected in the protocol.\n");
@@ -669,7 +776,6 @@ receiver_acs(struct simple_udp_connection *c,
 		  receiver_port, sender_port, datalen);
 //  printf("Data Rx: %.*s\n", datalen, data);
   printf("\n");
-  printf("Subject id %d == 2, right?\n", data[2]);
   //The first byte indicates the purpose of this message from the trusted server
   if (data[0]) {
 	  if (is_already_associated(data[2])) {
@@ -706,9 +812,42 @@ set_global_address(void)
   return &ipaddr;
 }
 
+//void
+//test_hmac() {
+//	const uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
+//							0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x51,
+//							0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
+//	printf("Vector: \n");
+//	full_print_hex(text, sizeof(text));
+//
+//	printf("Key: \n");
+//	full_print_hex(resource_key, sizeof(resource_key));
+//
+////	//Size : USHAMaxHashSize
+//	uint8_t digest[USHAMaxHashSize];
+////	//TODO process result code, should be 0
+//	hmac (SHA1, text, sizeof(text), resource_key, sizeof(resource_key), digest);
+//	//TODO usage of malloc might be the problem, according to a forum discussion
+//
+//	printf("HMAC_SHA_1: \n");
+//	full_print_hex(digest, 20);
+//
+//	uint32_t hashed = murmur3_32(digest, 20, 17);
+//	uint8_t hashed_array[4];
+//	hashed_array[0] = (hashed >> 24) & 0xff;
+//	hashed_array[1] = (hashed >> 16) & 0xff;
+//	hashed_array[2] = (hashed >> 8)  & 0xff;
+//	hashed_array[3] = hashed & 0xff;
+//
+//	printf("Hashed HMAC_SHA_1: \n");
+//	full_print_hex(hashed_array, 4);
+//}
+
 PROCESS_THREAD(hidra_r, ev, data)
 {
 	PROCESS_BEGIN();
+
+//	SENSORS_ACTIVATE(button_sensor);
 
 	set_global_address(); // TODO mag void zijn?
 
@@ -725,58 +864,26 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 	initialize_reference_table();
 
-	printf("Vector: \n");
-	full_print_hex(text, sizeof(text));
 
-	printf("Key: \n");
-	full_print_hex(resource_key, sizeof(resource_key));
+//	uint8_t test[40] = {0xf1, 0xf2, 0xf1, 0xf2, 0x5, 0xf1, 0xf2, 0xf1, 0xf2, 0x5,
+//			0xf1, 0xf2, 0xf1, 0xf2, 0x5,0xf1, 0xf2, 0xf1, 0xf2, 0x5,
+//			0xf1, 0xf2, 0xf1, 0xf2, 0x5,0xf1, 0xf2, 0xf1, 0xf2, 0x5,
+//			0xf1, 0xf2, 0xf1, 0xf2, 0x5,0xf1, 0xf2, 0xf1, 0xf2, 0x5};
+//	printf("test[40]: \n");
+//	full_print_hex(test, 40);
+//	uint32_t test_hashed = murmur3_32(test, 40, 17);
+//	uint8_t test_hashed_array[4];
+//	test_hashed_array[0] = (test_hashed >> 24) & 0xff;
+//	test_hashed_array[1] = (test_hashed >> 16) & 0xff;
+//	test_hashed_array[2] = (test_hashed >> 8)  & 0xff;
+//	test_hashed_array[3] = test_hashed & 0xff;
+//	printf("Test hash: \n");
+//	full_print_hex(test_hashed_array, 4);
 
-//	uint8_t digest[20];
-
-	///////////////////////////////
-//	uint32_t hash[5];
-////	char *msg = "hi";
-////	char *key = "hi";
-//	bitstr m;
-//	bitstr k;
-//
-//	m.d = text;
-//	m.l[0] = 8*sizeof(text);
-//	m.l[1] = 0;
-//
-//	k.d = resource_key;
-//	k.l[0] = 8*sizeof(resource_key);
-//	k.l[1] = 0;
-//
-//	hmac_sha1 (&k, &m, hash);
-//	printf("hash after \n");
-//	full_print_hex(hash, 20);
-
-	 ////////////////////////////////
-
-
-//	//Size : USHAMaxHashSize
-	uint8_t digest[USHAMaxHashSize];
-//	//TODO process result code, should be 0
-	hmac (SHA1, text, sizeof(text), resource_key, sizeof(resource_key), digest);
-	//TODO malloc might be the problem, according to internet
-
-	printf("HMAC_SHA_1: \n");
-	full_print_hex(digest, 20);
-
-	uint32_t hashed = murmur3_32(digest, 20, 17);
-	uint8_t hashed_array[4];
-	hashed_array[0] = (hashed >> 24) & 0xff;
-	hashed_array[1] = (hashed >> 16) & 0xff;
-	hashed_array[2] = (hashed >> 8)  & 0xff;
-	hashed_array[3] = hashed & 0xff;
-
-	printf("Hashed HMAC_SHA_1: \n");
-	full_print_hex(hashed_array, 4);
 
 	while(1) {
-//			PROCESS_WAIT_EVENT(); //TODO stond dit hier vroeger ook?
-		}
+		PROCESS_WAIT_EVENT();
+	}
 
 	PROCESS_END();
 }
@@ -832,10 +939,10 @@ ECB-AES128
     2b7e151628aed2a6abf7158809cf4f3c
 
   resulting cipher
-    3ad77bb40d7a3660a89ecaf32466ef97 
-    f5d3d58503b9699de785895a96fdbaaf 
-    43b1cd7f598ece23881b00e3ed030688 
-    7b0c785e27e8ad3f8223207104725dd4 
+    3ad77bb40d7a3660a89ecaf32466ef97
+    f5d3d58503b9699de785895a96fdbaaf
+    43b1cd7f598ece23881b00e3ed030688
+    7b0c785e27e8ad3f8223207104725dd4
 
 
 NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
@@ -852,7 +959,7 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
 #define Nk 4        // The number of 32 bit words in a key.
 #define Nr 10       // The number of rounds in AES Cipher.
 
-// jcallan@github points out that declaring Multiply as a function 
+// jcallan@github points out that declaring Multiply as a function
 // reduces code size considerably with the Keil ARM compiler.
 // See this link for more information: https://github.com/kokke/tiny-AES-C/pull/3
 #ifndef MULTIPLY_AS_A_FUNCTION
@@ -871,7 +978,7 @@ typedef uint8_t state_t[4][4];
 
 
 // The lookup-tables are marked const so they can be placed in read-only storage instead of RAM
-// The numbers below can be computed dynamically trading ROM for RAM - 
+// The numbers below can be computed dynamically trading ROM for RAM -
 // This can be useful in (embedded) bootloader applications, where ROM is often limited.
 static const uint8_t sbox[256] = {
   //0     1    2      3     4    5     6     7      8    9     A      B    C     D     E     F
@@ -910,7 +1017,7 @@ static const uint8_t rsbox[256] = {
   0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
   0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d };
 
-// The round constant word array, Rcon[i], contains the values given by 
+// The round constant word array, Rcon[i], contains the values given by
 // x to the power (i-1) being powers of x (x is denoted as {02}) in the field GF(2^8)
 static const uint8_t Rcon[11] = {
   0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36 };
@@ -920,8 +1027,8 @@ static const uint8_t Rcon[11] = {
  * that you can remove most of the elements in the Rcon array, because they are unused.
  *
  * From Wikipedia's article on the Rijndael key schedule @ https://en.wikipedia.org/wiki/Rijndael_key_schedule#Rcon
- * 
- * "Only the first some of these constants are actually used – up to rcon[10] for AES-128 (as 11 round keys are needed), 
+ *
+ * "Only the first some of these constants are actually used – up to rcon[10] for AES-128 (as 11 round keys are needed),
  *  up to rcon[8] for AES-192, up to rcon[7] for AES-256. rcon[0] is not used in AES algorithm."
  */
 
@@ -944,12 +1051,12 @@ static uint8_t getSBoxInvert(uint8_t num)
 */
 #define getSBoxInvert(num) (rsbox[(num)])
 
-// This function produces Nb(Nr+1) round keys. The round keys are used in each round to decrypt the states. 
+// This function produces Nb(Nr+1) round keys. The round keys are used in each round to decrypt the states.
 static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)
 {
   unsigned i, j, k; //TODO warning: unsigned means unsigned int, but that has 2 bytes on Z1, with msp430-gcc, vs 4 bytes on other compilers
   uint8_t tempa[4]; // Used for the column/row operations
-  
+
   // The first round key is the key itself.
   for (i = 0; i < Nk; ++i)
   {
@@ -985,7 +1092,7 @@ static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)
         tempa[3] = u8tmp;
       }
 
-      // SubWord() is a function that takes a four-byte input word and 
+      // SubWord() is a function that takes a four-byte input word and
       // applies the S-box to each of the four bytes to produce an output word.
 
       // Function Subword()
@@ -1069,14 +1176,14 @@ static void ShiftRows(state_t* state)
 {
   uint8_t temp;
 
-  // Rotate first row 1 columns to left  
+  // Rotate first row 1 columns to left
   temp           = (*state)[0][1];
   (*state)[0][1] = (*state)[1][1];
   (*state)[1][1] = (*state)[2][1];
   (*state)[2][1] = (*state)[3][1];
   (*state)[3][1] = temp;
 
-  // Rotate second row 2 columns to left  
+  // Rotate second row 2 columns to left
   temp           = (*state)[0][2];
   (*state)[0][2] = (*state)[2][2];
   (*state)[2][2] = temp;
@@ -1104,7 +1211,7 @@ static void MixColumns(state_t* state)
   uint8_t i;
   uint8_t Tmp, Tm, t;
   for (i = 0; i < 4; ++i)
-  {  
+  {
     t   = (*state)[i][0];
     Tmp = (*state)[i][0] ^ (*state)[i][1] ^ (*state)[i][2] ^ (*state)[i][3] ;
     Tm  = (*state)[i][0] ^ (*state)[i][1] ; Tm = xtime(Tm);  (*state)[i][0] ^= Tm ^ Tmp ;
@@ -1146,7 +1253,7 @@ static void InvMixColumns(state_t* state)
   int i;
   uint8_t a, b, c, d;
   for (i = 0; i < 4; ++i)
-  { 
+  {
     a = (*state)[i][0];
     b = (*state)[i][1];
     c = (*state)[i][2];
@@ -1178,14 +1285,14 @@ static void InvShiftRows(state_t* state)
 {
   uint8_t temp;
 
-  // Rotate first row 1 columns to right  
+  // Rotate first row 1 columns to right
   temp = (*state)[3][1];
   (*state)[3][1] = (*state)[2][1];
   (*state)[2][1] = (*state)[1][1];
   (*state)[1][1] = (*state)[0][1];
   (*state)[0][1] = temp;
 
-  // Rotate second row 2 columns to right 
+  // Rotate second row 2 columns to right
   temp = (*state)[0][2];
   (*state)[0][2] = (*state)[2][2];
   (*state)[2][2] = temp;
@@ -1209,8 +1316,8 @@ static void Cipher(state_t* state, const uint8_t* RoundKey)
   uint8_t round = 0;
 
   // Add the First round key to the state before starting the rounds.
-  AddRoundKey(0, state, RoundKey); 
-  
+  AddRoundKey(0, state, RoundKey);
+
   // There will be Nr rounds.
   // The first Nr-1 rounds are identical.
   // These Nr-1 rounds are executed in the loop below.
@@ -1221,7 +1328,7 @@ static void Cipher(state_t* state, const uint8_t* RoundKey)
     MixColumns(state);
     AddRoundKey(round, state, RoundKey);
   }
-  
+
   // The last round is given below.
   // The MixColumns function is not here in the last round.
   SubBytes(state);
@@ -1235,7 +1342,7 @@ static void InvCipher(state_t* state, const uint8_t* RoundKey)
   uint8_t round = 0;
 
   // Add the First round key to the state before starting the rounds.
-  AddRoundKey(Nr, state, RoundKey); 
+  AddRoundKey(Nr, state, RoundKey);
 
   // There will be Nr rounds.
   // The first Nr-1 rounds are identical.
@@ -1247,7 +1354,7 @@ static void InvCipher(state_t* state, const uint8_t* RoundKey)
     AddRoundKey(round, state, RoundKey);
     InvMixColumns(state);
   }
-  
+
   // The last round is given below.
   // The MixColumns function is not here in the last round.
   InvShiftRows(state);
@@ -1317,11 +1424,38 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 //END OF CODE FROM tiny AES PROJECT
 /////////////////////////////////////////
 
+//Assumption about length of hash: 4
+//Quick fix: mac is hash of (resource_key | message)
+uint8_t
+same_mac(uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes) {
+	uint8_t array_with_key[length_in_bytes + 16];
+	memcpy(array_with_key, resource_key, 16);
+	memcpy(array_with_key + 16, array_to_check, length_in_bytes);
+	printf("Array before hash: \n");
+	full_print_hex(array_with_key, length_in_bytes + 16);
+	printf("Length: %d\n", sizeof(array_with_key));
+	//Differences between murmur3 implementations => always take the first 20 bytes as a comparison for now.
+	uint32_t hashed = murmur3_32(array_with_key, 20, 17);
+	uint8_t hashed_array[4];
+	hashed_array[0] = (hashed >> 24) & 0xff;
+	hashed_array[1] = (hashed >> 16) & 0xff;
+	hashed_array[2] = (hashed >> 8)  & 0xff;
+	hashed_array[3] = hashed & 0xff;
+	printf("Result should be: \n");
+	full_print_hex(hashed_value, 4);
+	printf("Actual hash: \n");
+	full_print_hex(hashed_array, 4);
+	return (hashed_array[0] == hashed_value[0] &&
+			hashed_array[1] == hashed_value[1] &&
+			hashed_array[2] == hashed_value[2] &&
+			hashed_array[3] == hashed_value[3]);
+}
+
 //Hash to 32 bits from https://en.wikipedia.org/wiki/MurmurHash
-//TODO if it doesn't work, try https://github.com/PeterScott/murmur3/blob/master/murmur3.c
-//TODO doe seed = 17
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 {
+	printf("Values to hash\n");
+	full_print_hex(key, len);
 	uint32_t h = seed;
 	if (len > 3) {
 		const uint32_t* key_x4 = (const uint32_t*) key;
@@ -1358,259 +1492,3 @@ uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 	h ^= h >> 16;
 	return h;
 }
-
-/////////////////////////TODO verwijder
-//////////////////////////
-
-
-uint8_t *rd32be (uint32_t * n, uint8_t * msg) {
-  *n = *msg << 24;
-  ++msg;
-  *n |= *msg << 16;
-  ++msg;
-  *n |= *msg << 8;
-  ++msg;
-  *n |= *msg;
-  return ++msg;
-}                               /* libpk */
-
-    /* do this outside b32 h[5]={ 0x67452301, 0xefcdab89, 0x98badcfe, */
-    /* 0x10325476, 0xc3d2e1f0}; */
-
-typedef struct {
-  unsigned char *d;
-  uint32_t l[2];
-} bitstr;
-
-
-typedef struct {
-  uint32_t h[5];
-  uint32_t l[2];
-} hsh;
-
-int hsh_rst (hsh * h) {
-
-  h->h[0] = 0x67452301;
-  h->h[1] = 0xefcdab89;
-  h->h[2] = 0x98badcfe;
-  h->h[3] = 0x10325476;
-  h->h[4] = 0xc3d2e1f0;
-  h->l[0] = 0;
-  h->l[1] = 0;
-
-  return 0;
-
-}
-
-int sha1_nxt (uint8_t * msg, uint32_t bits, hsh * h) {
-  uint32_t w[80];
-  int i, j, b;
-
-  if (bits != 512)
-    return 1;                   /* bad length */
-  h->l[0] += bits;
-  if (h->l[0] < bits) {
-    h->l[1]++;
-    if (!(h->l[1]))
-      return 2;
-  }                             /* msg size overflow */
-  for (i = 0; i < 16; i++)
-    msg = rd32be (w + i, msg);
-  grind (w, h->h);
-  return 0;
-}
-
-int sha1_end (uint8_t * msg, uint32_t bits, hsh * h) {
-  uint32_t w[80];
-  int i = 0, j, b;
-  if (bits >= 512)
-    return 1;                   /* cant end with this chunk size */
-  if (bits) {                   /* do incomplete chunk */
-    h->l[0] += bits;
-    if (h->l[0] < bits) {
-      h->l[1]++;
-      if (!(h->l[1]))
-        return 2;
-    }                           /* msg size overflow */
-    if (j = bits / 32) {        /* do all complete words */
-      for (i = 0; i < j; i++)
-        msg = rd32be (w + i, msg);
-      bits %= 32;
-    }
-    b = bits;                   /* do final word */
-    w[i] = 1 << (31 - bits);
-    w[i] |= *msg << 24;
-    ++msg;
-    b -= 8;
-    if (b > 0) {
-      w[i] |= *msg << 16;
-      ++msg;
-      b -= 8;
-      if (b > 0) {
-        w[i] |= *msg << 8;
-        ++msg;
-        b -= 8;
-        if (b > 0) {
-          w[i] |= *msg;
-          ++msg;
-          b -= 8;
-        }
-      }
-    }
-    w[i] &= 0xffffffff << (31 - bits);
-    i++;
-    if (j >= 14) {
-      if (i == 15)
-        w[15] = 0;
-      grind (w, h->h);
-      i = 0;
-    }
-
-  }
-  else {                        /* add final chunk having length */
-    w[0] = 0x80000000;
-    i = 1;
-  }
-  for (; i < 14; i++)
-    w[i] = 0;                   /* fill with zero, leave 64 bits */
-  w[i] = h->l[1];
-  i++;
-  w[i] = h->l[0];               /* fill last 64 bits with length */
-  grind (w, h->h);
-  h->l[0] = 0;
-  h->l[1] = 0;
-  return 0;
-}
-
-int sha1_finish (bitstr * msg, hsh * h) {
-  bitstr p;
-
-  p = *msg;
-  while (p.l[1] || (p.l[0] >= 512)) {
-    sha1_nxt (p.d, 512, h);     /* FIXME check return value? */
-    p.d += 64;
-    if (p.l[0] < 512) {
-      if (p.l[1]) {
-        p.l[1]--;
-      }
-      else
-        return 1;               /* length underflow; FIXME redundant? */
-    }
-    p.l[0] -= 512;
-  }
-  sha1_end (p.d, p.l[0], h);    /* FIXME check return value? */
-  return 0;
-}
-
-int sha1 (bitstr * msg, hsh * h) {
-  int i;
-  bitstr p;
-
-  hsh_rst (h);
-  return sha1_finish (msg, h);
-}
-
-uint32_t f (uint32_t t, uint32_t * a, uint32_t * w) {
-  uint32_t temp = 0;
-  uint32_t k[4] = { 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6 };
-  temp = ((a[0] << 5) | (a[0] >> 27)) + a[4] + w[t];
-  switch (t / 20) {
-  case 0:
-    temp += k[0];
-    temp += (a[1] & a[2]) | ((~a[1]) & a[3]);
-    break;
-  case 1:
-    temp += k[1];
-    temp += a[1] ^ a[2] ^ a[3];
-    break;
-  case 2:
-    temp += k[2];
-    temp += (a[1] & a[2]) | (a[1] & a[3]) | (a[2] & a[3]);
-    break;
-  case 3:
-    temp += k[3];
-    temp += a[1] ^ a[2] ^ a[3];
-    break;
-  }
-  return temp;
-}
-
-int grind (uint32_t * w, uint32_t * h) {
-  uint32_t t, temp;
-  uint32_t a[5];
-  for (t = 16; t < 80; t++) {
-    temp = w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16];
-    w[t] = (temp << 1) | (temp >> 31);
-  }
-  for (t = 0; t < 5; t++)
-    a[t] = h[t];
-  for (t = 0; t < 80; t++) {
-    temp = f (t, a, w);
-    a[4] = a[3];
-    a[3] = a[2];
-    a[2] = (a[1] << 30) | (a[1] >> 2);
-    a[1] = a[0];
-    a[0] = temp;
-  }
-  for (t = 0; t < 5; t++)
-    h[t] += a[t];
-  return 0;
-}
-
-
-/* rfc3174
-it all boiled down to reading big endian numbers correctly ;)
-and realizing the you are not writing anything in big endian form :P
-Wed Jul 16 00:32:21 IST 2014
-*/
-
-
-uint8_t *wr32be (uint32_t n, uint8_t * msg) {
-  uint32_t mask = 0xff;
-  *msg = n >> 24;
-  ++msg;
-  *msg = (n >> 16) & mask;
-  ++msg;
-  *msg = (n >> 8) & mask;
-  ++msg;
-  *msg = n & mask;
-  return ++msg;
-}                               /* libpk */
-
-int hmac_sha1 (bitstr * key, bitstr * msg, uint32_t mac[5]) {
-  uint32_t k[16] = { 0 };
-  uint32_t o[16], i[16];
-  uint32_t x;
-  hsh h, fin;
-
-
-  if (key->l[1] || key->l[0] > 512) {
-    sha1 (key, &h);
-    for (x = 0; x < 5; x++)
-      wr32be (h.h[x], k + x);   /* FIXME: if wr32be works not */
-  }
-  else
-    memcpy (k, key->d, key->l[0] / 8 + (key->l[0] % 8 && 1));
-
-  for (x = 0; x < 16; x++) {
-    o[x] = 0x5c5c5c5c ^ k[x];
-    i[x] = 0x36363636 ^ k[x];
-  }
-
-
-  hsh_rst (&h);
-  sha1_nxt (i, 512, &h);
-  sha1_finish (msg, &h);
-  for (x = 0; x < 5; x++)
-    wr32be (h.h[x], h.h + x);   /* FIXME: if wr32be works not */
-  hsh_rst (&fin);
-  sha1_nxt (o, 512, &fin);
-  sha1_end (h.h, 160, &fin);
-
-  for (x = 0; x < 5; x++)
-    mac[x] = fin.h[x];
-  return 0;
-
-}
-
-/////////////////////////////:

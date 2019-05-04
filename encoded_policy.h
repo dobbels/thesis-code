@@ -12,8 +12,10 @@ struct associated_subject {
 	uint8_t hid_cm_ind_success :1;
 	uint8_t hid_cm_ind_req_success :1;
 	uint8_t hid_s_r_req_succes :1;
+	uint8_t fresh_information : 1;
 	uint8_t policy_size; // in bytes. Only uint8_t, because datalen in UDP will never exceed 127 bytes, so uint16_t is not necessary
 	uint8_t *policy;
+	uint8_t *nonceSR;
 };
 
 uint8_t blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id);

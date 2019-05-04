@@ -75,7 +75,6 @@ USHAReset (USHAContext * ctx, enum SHAversion whichSha)
 int
 USHAInput (USHAContext * ctx, const uint8_t * bytes, unsigned int bytecount)
 {
-//	printf("bytecount %d\n", bytecount);
   if (ctx)
     {
       switch (ctx->whichSha)
