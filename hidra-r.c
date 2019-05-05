@@ -849,7 +849,7 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 //	SENSORS_ACTIVATE(button_sensor);
 
-	set_global_address(); // TODO mag void zijn?
+	set_global_address();
 
 	// Register a sockets, with the correct host and remote ports
 	// NULL parameter as the destination address to allow packets from any address. (fixed IPv6 address can be given)

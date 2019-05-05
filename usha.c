@@ -223,9 +223,9 @@ USHABlockSize (enum SHAversion whichSha)
 //      return SHA256_Message_Block_Size;
 //    case SHA384:
 //      return SHA384_Message_Block_Size;
-//    default:
+    default:
 //    case SHA512:
-//      return SHA512_Message_Block_Size;
+      return SHA512_Message_Block_Size;
     }
 }
 
@@ -257,9 +257,9 @@ USHAHashSize (enum SHAversion whichSha)
 //      return SHA256HashSize;
 //    case SHA384:
 //      return SHA384HashSize;
-//    default:
+    default:
 //    case SHA512:
-//      return SHA512HashSize;
+      return SHA512HashSize;
     }
 }
 
@@ -291,8 +291,8 @@ USHAHashSizeBits (enum SHAversion whichSha)
 //      return SHA256HashSizeBits;
 //    case SHA384:
 //      return SHA384HashSizeBits;
-//    default:
+    default:
 //    case SHA512:
-//      return SHA512HashSizeBits;
+      return SHA512HashSizeBits;
     }
 }
