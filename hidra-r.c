@@ -11,6 +11,7 @@
 #include "dev/button-sensor.h"
 #include "simple-udp.h"
 
+#include "lib/memb.h"
 #include "cfs/cfs.h"
 
 #include "tiny-AES-c/aes.h"
@@ -35,6 +36,8 @@
 #define ACS_UDP_PORT 1234
 #define SUBJECT_UDP_PORT 1996
 
+#define MAX_NUMBER_OF_SUBJECTS 3
+
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
 uint8_t same_mac(uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes);
 
@@ -49,7 +52,7 @@ const uint8_t resource_key[16] =
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
 		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
 
-//General file structure is a concatenation of:
+//General file structure is a concatenation of: //TODO dit kan veel beter door ze hier te declareren en in het programma te initialiseren. Dan kan je wel relatief tov elkaar indexen
 //Current last one-way key chain value Kr,cm
 uint8_t k_i_r_cm_offset = 0;
 //Pending subject number
@@ -64,8 +67,107 @@ static void print_hex(uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
 uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_len);
 
-//struct policy policy;
-struct associated_subjects *associated_subjects;
+uint8_t nb_of_associated_subjects;
+struct associated_subjects * associated_subjects;
+
+MEMB(alloc_associated_subjects, struct associated_subject, MAX_NUMBER_OF_SUBJECTS);
+
+struct associated_subject *
+associate_new_subject(uint8_t subject_id)
+{
+	struct associated_subject * current_subject = memb_alloc(&alloc_associated_subjects);
+	if(current_subject == NULL) {
+		return NULL;
+	}
+
+	current_subject->id = subject_id;
+	printf("new subject id : %d\n", current_subject->id);
+	return current_subject;
+}
+
+void
+deassociate_subject(struct associated_subject *sub)
+{
+	memb_free(&alloc_associated_subjects, sub);
+
+}
+
+MEMB(policies, struct policy, MAX_NUMBER_OF_SUBJECTS);
+
+struct policy *
+store_policy(struct associated_subject * subject, uint8_t *policy_to_copy)
+{
+	struct policy * policy = memb_alloc(&policies);
+	if(policy == NULL) {
+		return NULL;
+	}
+	memcpy(policy->content, policy_to_copy, subject->policy_size);
+	subject->policy = policy->content;
+	return policy;
+}
+
+void
+delete_policy(struct policy *p)
+{
+	memb_free(&policies, p);
+}
+
+struct nonce_sr {
+   uint8_t content[8];
+};
+
+MEMB(nonces, struct nonce_sr, MAX_NUMBER_OF_SUBJECTS);
+
+struct nonce_sr *
+store_nonce_sr(struct associated_subject * subject, uint8_t *nonce_sr_to_copy)
+{
+	struct nonce_sr * nonce = memb_alloc(&nonces);
+	if(nonce == NULL) {
+		return NULL;
+	}
+	memcpy(nonce->content, nonce_sr_to_copy, 8);
+	subject->nonce_sr = nonce->content;
+	return nonce;
+}
+
+void
+delete_nonce_sr(struct nonce_sr *n)
+{
+	memb_free(&nonces, n);
+}
+
+/*
+ * Change policy related to subject with general DENY.
+ * If no associated subject exists with subject_id, return failure = 0
+ */
+uint8_t
+blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		printf("assocs->subject_association_set[subject_index]->id: %d\n", assocs->subject_association_set[subject_index]->id);
+		if(assocs->subject_association_set[subject_index]->id == subject_id) {
+			uint8_t policy_id = get_char_from(0, assocs->subject_association_set[subject_index]->policy);
+
+			//Set enough memory to zero for the new policy (TODO actually redundant?)
+			memset(assocs->subject_association_set[subject_index]->policy, 0, 2);
+
+			// Same policy id
+			assocs->subject_association_set[subject_index]->policy[0] = policy_id;
+			// Deny everything, no extra rules.
+			assocs->subject_association_set[subject_index]->policy[1] = 0;
+			assocs->subject_association_set[subject_index]->policy_size = 2;
+
+			result = 1;
+			// print policy, for debugging
+//			printf("After blacklist: \n");
+//			print_policy(assocs->subject_association_set[subject_index]->policy, 0);
+		}
+	}
+	return result;
+}
 
 // For demo purposes
 unsigned char battery_level = 249;
@@ -155,7 +257,7 @@ static void
 send_nack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr)
 {
-	printf("Sending unicast to \n");
+	printf("Sending NACK to \n");
 	uip_debug_ipaddr_print(sender_addr);
 	printf("\n");
 
@@ -171,7 +273,7 @@ static void
 send_ack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr)
 {
-	printf("Sending unicast to \n");
+	printf("Sending ACK to \n");
 	uip_debug_ipaddr_print(sender_addr);
 	printf("\n");
 
@@ -186,7 +288,7 @@ is_already_associated(uint8_t id)
 
 	int subject_index = 0;
 
-	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 		if(associated_subjects->subject_association_set[subject_index]->id == id) {
 			result = 1;
 		}
@@ -199,7 +301,7 @@ is_already_associated(uint8_t id)
 //set_hid_cm_ind_success(uint8_t id, uint8_t bit)
 //{
 //	int subject_index = 0;
-//	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+//	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 //		if(associated_subjects->subject_association_set[subject_index]->id == id) {
 //			associated_subjects->subject_association_set[subject_index]->hid_cm_ind_success = bit;
 //		}
@@ -213,7 +315,7 @@ hid_cm_ind_success(uint8_t id)
 
 	int subject_index = 0;
 
-	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 		if(associated_subjects->subject_association_set[subject_index]->id == id &&
 				associated_subjects->subject_association_set[subject_index]->hid_cm_ind_success) {
 			result = 1;
@@ -227,7 +329,7 @@ static void
 set_hid_s_r_req_success(uint8_t id, uint8_t bit)
 {
 	int subject_index = 0;
-	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 		if(associated_subjects->subject_association_set[subject_index]->id == id) {
 			associated_subjects->subject_association_set[subject_index]->hid_s_r_req_succes = bit;
 		}
@@ -245,7 +347,7 @@ hid_s_r_req_success(uint8_t id)
 
 	int subject_index = 0;
 
-	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 		if(associated_subjects->subject_association_set[subject_index]->id == id &&
 				associated_subjects->subject_association_set[subject_index]->hid_s_r_req_succes) {
 			result = 1;
@@ -259,7 +361,7 @@ static void
 set_fresh_information(uint8_t subject_id, uint8_t bit)
 {
 	int subject_index = 0;
-	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 		if(associated_subjects->subject_association_set[subject_index]->id == subject_id) {
 			associated_subjects->subject_association_set[subject_index]->fresh_information = bit;
 		}
@@ -272,7 +374,7 @@ fresh_information(uint8_t subject_id)
 	uint8_t result = 0;
 
 	int subject_index = 0;
-	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 		if(associated_subjects->subject_association_set[subject_index]->id == subject_id &&
 				associated_subjects->subject_association_set[subject_index]->fresh_information) {
 			result = 1;
@@ -285,7 +387,7 @@ static void
 set_hid_cm_ind_req_success(uint8_t subject_id, uint8_t bit)
 {
 	int subject_index = 0;
-	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 		if(associated_subjects->subject_association_set[subject_index]->id == subject_id) {
 			associated_subjects->subject_association_set[subject_index]->hid_cm_ind_req_success = bit;
 		}
@@ -298,7 +400,7 @@ hid_cm_ind_req_success(uint8_t subject_id)
 	uint8_t result = 0;
 
 	int subject_index = 0;
-	for (; subject_index < associated_subjects->nb_of_associated_subjects ; subject_index++) {
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 		if(associated_subjects->subject_association_set[subject_index]->id == subject_id &&
 				associated_subjects->subject_association_set[subject_index]->hid_cm_ind_req_success) {
 			result = 1;
@@ -371,7 +473,7 @@ handle_subject_access_request(struct simple_udp_connection *c,
 	char exists = 0;
 	struct associated_subject *current_sub;
 	int sub_index = 0;
-	for (; sub_index < associated_subjects->nb_of_associated_subjects ; sub_index++) {
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
 		current_sub = associated_subjects->subject_association_set[sub_index];
 		if (current_sub->id == sub_id) {
 			exists = 1;
@@ -506,7 +608,7 @@ construct_cm_ind_req(uint8_t *cm_ind_req) {
 		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
 		printf("\n");
 	} else {
-	   printf("ERROR: could not write Nonce3 to memory.\n");
+	   printf("Error: could not write Nonce3 to memory.\n");
 	}
 
 	//Compute and fill MAC
@@ -540,31 +642,31 @@ process_cm_ind(struct simple_udp_connection *c,
 
 
 	if(same_mac(cm_ind + datalen - 4, cm_ind + 2, datalen - 6)) {
-		if (associated_subjects->nb_of_associated_subjects >= 10) {
+		if (nb_of_associated_subjects >= 10) {
 			printf("Oops, the number of associated subjects is currently set to 10.\n");
 		}
-		associated_subjects->nb_of_associated_subjects++;
+		nb_of_associated_subjects++;
 
-		struct associated_subject *current_subject = malloc(sizeof(struct associated_subject));
-		//TODO if (associated_subjects->subject_association_set != NULL) {} else handleAllocError();
+		struct associated_subject *current_subject = associate_new_subject(subject_id);
 
-		associated_subjects->subject_association_set[associated_subjects->nb_of_associated_subjects - 1] = current_subject;
+		if (current_subject == NULL) {
+			printf("Error in associate_new_subject(subject_id)\n");
+		}
 
-		current_subject->id = subject_id;
-		printf("new subject id : %d\n", current_subject->id);
+		associated_subjects->subject_association_set[nb_of_associated_subjects - 1] = current_subject;
 
 		// assign policy size based on knowledge about the rest of the message
 		current_subject->policy_size = datalen - 33;
 		printf("new subject policy_size: %d\n", current_subject->policy_size);
 
-		// malloc policy range with right number of bytes
-		current_subject->policy = malloc(current_subject->policy_size * sizeof(uint8_t));
-
 		// decrypt policy before storage
 		xcrypt_ctr(resource_key, cm_ind + 29, current_subject->policy_size);
 
-		// copy decrypted policy to allocated memory
-		memcpy(current_subject->policy, cm_ind + 29, current_subject->policy_size);
+		// allocate memory and copy decrypted policy
+		struct policy *p =  store_policy(current_subject, cm_ind + 29);
+		if(p == NULL) {
+			printf("Error in store_policy()\n");
+		}
 
 		// print policy, for debugging
 		printf("Policy associated to subject %d : \n", subject_id);
@@ -572,16 +674,18 @@ process_cm_ind(struct simple_udp_connection *c,
 
 		//Ignore lifetime value
 
-		//Store NonceSR for this subject
-		current_subject->nonceSR = malloc(sizeof(uint8_t) * 8);
-		memcpy(current_subject->nonceSR, cm_ind + 4, 8);
-		printf("NonceSR: %d\n", current_subject->policy_size);
-		full_print_hex(current_subject->nonceSR, 8);
+		//Store nonce_sr for this subject
+		struct nonce_sr *n =  store_nonce_sr(current_subject, cm_ind + 4);
+		if(n == NULL) {
+			printf("Error in store_policy()\n");
+		}
+
+		printf("Nonce_sr:\n");
+		full_print_hex(current_subject->nonce_sr, 8);
 
 		if (!any_previous_key_chain_value_stored) {
 			any_previous_key_chain_value_stored = 1; //=> on requests from next subjects, to do or not to do?
 			current_subject->fresh_information = 0;
-
 
 			printf("Kircm: \n");
 			full_print_hex(cm_ind + 13, 16);
@@ -593,7 +697,7 @@ process_cm_ind(struct simple_udp_connection *c,
 				printf("Successfully written Kircm (%i bytes) to %s\n", n, filename);
 				printf("\n");
 			} else {
-			   printf("ERROR: could not write Kircm to memory.\n");
+			   printf("Error: could not write Kircm to memory.\n");
 			}
 
 			//Write subject id to file system to update freshness later on
@@ -604,7 +708,7 @@ process_cm_ind(struct simple_udp_connection *c,
 				printf("Successfully written subject id (%i bytes) to %s\n", n, filename);
 				printf("\n");
 			} else {
-			   printf("ERROR: could not write subject id to memory.\n");
+			   printf("Error: could not write subject id to memory.\n");
 			}
 
 			//Request previous key chain value at credential manager
@@ -648,7 +752,7 @@ process_cm_ind_rep(struct simple_udp_connection *c,
 	   cfs_read(fd_read, for_mac + 2, 2);
 	   cfs_close(fd_read);
 	 } else {
-	   printf("ERROR: could not read nonce from memory.\n");
+	   printf("Error: could not read nonce from memory.\n");
 	 }
 
 	if(same_mac(data + 18, for_mac, 4)) {
@@ -661,7 +765,7 @@ process_cm_ind_rep(struct simple_udp_connection *c,
 		  cfs_read(fd_read, old_key, 16);
 		  cfs_close(fd_read);
 		} else {
-		  printf("ERROR: could not read nonce from memory.\n");
+		  printf("Error: could not read nonce from memory.\n");
 		}
 
 		printf("new_key: \n");
@@ -679,23 +783,18 @@ process_cm_ind_rep(struct simple_udp_connection *c,
 				cfs_close(fd_read);
 				printf("Setting freshness of subject %d\n", subject_id);
 				set_fresh_information(subject_id, 1);
-				uint8_t response = 1;
-				simple_udp_sendto(c, &response, 1, sender_addr);
-
+				send_ack(c, sender_addr);
 			} else {
-				uint8_t response = 0;
-				simple_udp_sendto(c, &response, 1, sender_addr);
-				printf("ERROR: could not read subect id from memory.\n");
+				printf("Error: could not read subect id from memory.\n");
+				send_nack(c, sender_addr);
 			}
 		} else {
-			uint8_t response = 0;
-			simple_udp_sendto(c, &response, 1, sender_addr);
 			printf("Error: Not a correct key, therefore subject information is not fresh \n");
+			send_nack(c, sender_addr);
 		}
 	} else {
-		uint8_t response = 0;
-		simple_udp_sendto(c, &response, 1, sender_addr);
 		printf("Incorrect MAC code\n");
+		send_nack(c, sender_addr);
 	}
 
 	//Clean up for next demo association (as it is at the moment)
@@ -812,36 +911,35 @@ set_global_address(void)
   return &ipaddr;
 }
 
-//void
-//test_hmac() {
-//	const uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
-//							0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x51,
-//							0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
-//	printf("Vector: \n");
-//	full_print_hex(text, sizeof(text));
-//
-//	printf("Key: \n");
-//	full_print_hex(resource_key, sizeof(resource_key));
-//
-////	//Size : USHAMaxHashSize
-//	uint8_t digest[USHAMaxHashSize];
-////	//TODO process result code, should be 0
-//	hmac (SHA1, text, sizeof(text), resource_key, sizeof(resource_key), digest);
-//	//TODO usage of malloc might be the problem, according to a forum discussion
-//
-//	printf("HMAC_SHA_1: \n");
-//	full_print_hex(digest, 20);
-//
-//	uint32_t hashed = murmur3_32(digest, 20, 17);
-//	uint8_t hashed_array[4];
-//	hashed_array[0] = (hashed >> 24) & 0xff;
-//	hashed_array[1] = (hashed >> 16) & 0xff;
-//	hashed_array[2] = (hashed >> 8)  & 0xff;
-//	hashed_array[3] = hashed & 0xff;
-//
-//	printf("Hashed HMAC_SHA_1: \n");
-//	full_print_hex(hashed_array, 4);
-//}
+void
+test_hmac() {
+	const uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
+							0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x51,
+							0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
+	printf("Vector: \n");
+	full_print_hex(text, sizeof(text));
+
+	printf("Key: \n");
+	full_print_hex(resource_key, sizeof(resource_key));
+
+//	//Size : USHAMaxHashSize
+	uint8_t digest[USHAMaxHashSize];
+//	//TODO process result code, should be 0
+	hmac (SHA1, text, sizeof(text), resource_key, sizeof(resource_key), digest);
+
+	printf("HMAC_SHA_1: \n");
+	full_print_hex(digest, 20);
+
+	uint32_t hashed = murmur3_32(digest, 20, 17);
+	uint8_t hashed_array[4];
+	hashed_array[0] = (hashed >> 24) & 0xff;
+	hashed_array[1] = (hashed >> 16) & 0xff;
+	hashed_array[2] = (hashed >> 8)  & 0xff;
+	hashed_array[3] = hashed & 0xff;
+
+	printf("Hashed HMAC_SHA_1: \n");
+	full_print_hex(hashed_array, 4);
+}
 
 PROCESS_THREAD(hidra_r, ev, data)
 {
@@ -860,29 +958,17 @@ PROCESS_THREAD(hidra_r, ev, data)
 							  NULL, SUBJECT_UDP_PORT,
 							  receiver_subject);
 
-	associated_subjects->nb_of_associated_subjects = 0;
+	nb_of_associated_subjects = 0;
 
 	initialize_reference_table();
 
-
-//	uint8_t test[40] = {0xf1, 0xf2, 0xf1, 0xf2, 0x5, 0xf1, 0xf2, 0xf1, 0xf2, 0x5,
-//			0xf1, 0xf2, 0xf1, 0xf2, 0x5,0xf1, 0xf2, 0xf1, 0xf2, 0x5,
-//			0xf1, 0xf2, 0xf1, 0xf2, 0x5,0xf1, 0xf2, 0xf1, 0xf2, 0x5,
-//			0xf1, 0xf2, 0xf1, 0xf2, 0x5,0xf1, 0xf2, 0xf1, 0xf2, 0x5};
-//	printf("test[40]: \n");
-//	full_print_hex(test, 40);
-//	uint32_t test_hashed = murmur3_32(test, 40, 17);
-//	uint8_t test_hashed_array[4];
-//	test_hashed_array[0] = (test_hashed >> 24) & 0xff;
-//	test_hashed_array[1] = (test_hashed >> 16) & 0xff;
-//	test_hashed_array[2] = (test_hashed >> 8)  & 0xff;
-//	test_hashed_array[3] = test_hashed & 0xff;
-//	printf("Test hash: \n");
-//	full_print_hex(test_hashed_array, 4);
-
-
+	//Sorts of errors with hmac: reading outside memory, illegal out of bounds (on PROCESS_WAIT_EVENT/PROCESS_END), unreachable resource node -> maybe wait longer for RPL to converge?
+	//Also encountered these errors without hmac present?
+	test_hmac();
+	printf("Here \n");
 	while(1) {
 		PROCESS_WAIT_EVENT();
+//		printf("Here \n");
 	}
 
 	PROCESS_END();

@@ -3,39 +3,6 @@
 
 #include "encoded_policy.h"
 
-/*
- * Change policy related to subject with general DENY.
- * If no associated subject exists with subject_id, return failure = 0
- */
-uint8_t
-blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id)
-{
-	uint8_t result = 0;
-
-	int subject_index = 0;
-	for (; subject_index < assocs->nb_of_associated_subjects ; subject_index++) {
-		printf("assocs->subject_association_set[subject_index]->id: %d\n", assocs->subject_association_set[subject_index]->id);
-		if(assocs->subject_association_set[subject_index]->id == subject_id) {
-			uint8_t policy_id = get_char_from(0, assocs->subject_association_set[subject_index]->policy);
-
-			free(assocs->subject_association_set[subject_index]->policy);
-
-			assocs->subject_association_set[subject_index]->policy = malloc(2 * sizeof(uint8_t));
-			// Same policy id
-			assocs->subject_association_set[subject_index]->policy[0] = policy_id;
-			// Deny everything, no extra rules.
-			assocs->subject_association_set[subject_index]->policy[1] = 0;
-			assocs->subject_association_set[subject_index]->policy_size = 2;
-
-			result = 1;
-			// print policy, for debugging
-//			printf("After blacklist: \n");
-//			print_policy(assocs->subject_association_set[subject_index]->policy, 0);
-		}
-	}
-	return result;
-}
-
 void
 copy_policy(const uint8_t *data, int bit_index, uint8_t policy_size, uint8_t *destination)
 {

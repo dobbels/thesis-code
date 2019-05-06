@@ -44,13 +44,22 @@ uint8_t credential_manager_key[16];
 uint8_t credential_manager_nonce[8];
 
 //File structure is a concatenation of:
-//TicketCM
+//TicketCM (26 bytes)
 int ticketcm_offset = 0;
-//Kscm
+//Kscm (16 bytes)
 int kscm_offset = 26;
-//Noncescm
+//Noncescm (8 bytes)
 int noncescm_offset = 42;
-
+//Nonce2 (8 bytes)
+int nonce2_offset = 50;
+//TicketR (26 bytes)
+int ticketr_offset = 58;
+//Ksr (16 bytes)
+int k_sr_offset = 84;
+//Noncesr (8 bytes)
+int nonce_sr_offset = 100;
+//Subkey (16 bytes)
+int subkey_offset = 108;
 
 static void full_print_hex(uint8_t* str, uint8_t length);
 static void print_hex(uint8_t* str, uint8_t len);
@@ -87,7 +96,7 @@ receiver_resource(struct simple_udp_connection *c,
 }
 
 static void
-send_access_request(void) {
+send_access_request(void) { //TODO encrypted with K(s,r) and/or rather authenticated with MAC?
 	//Content of access request, all full bytes for simplicity
 	// = id (1 byte) + action (1 byte) + system_reference (1 byte)
 	const char action =  2;//PUT
@@ -115,7 +124,7 @@ process_ans_rep(const uint8_t *data,
 		printf("Successfully written ticket (%i bytes) to %s\n", n, filename);
 		printf("\n");
 	} else {
-	  printf("ERROR: could not write ticket to memory.\n");
+	  printf("Error: could not write ticket to storage.\n");
 	}
 
 	printf("Encrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
@@ -138,7 +147,7 @@ process_ans_rep(const uint8_t *data,
 		printf("Successfully written Kscm (%i bytes) to %s\n", n, filename);
 		printf("\n");
 	} else {
-	   printf("ERROR: could not write Kscm to memory.\n");
+	   printf("Error: could not write Kscm to storage.\n");
 	}
 
 	printf("Decrypted HID_ANS_REP, Noncescm: \n");
@@ -152,10 +161,10 @@ process_ans_rep(const uint8_t *data,
 		printf("Successfully written Noncescm (%i bytes) to %s\n", n, filename);
 		printf("\n");
 	} else {
-	   printf("ERROR: could not write Noncescm to memory.\n");
+	   printf("Error: could not write Noncescm to storage.\n");
 	}
 
-	//TODO if nonce1 and IDcm are stored at start of protocol, check them (and maybe update IDcm if required)?
+	//TODO store nonce1 and IDcm at start of protocol and check them here?
 }
 
 static void
@@ -179,13 +188,22 @@ construct_cm_req(uint8_t *cm_req) {
 	part_of_nonce = random_rand();
 	cm_req[9] = (part_of_nonce >> 8);
 	cm_req[10] = part_of_nonce & 0xffff;
+	printf("Nonce2 \n");
+	full_print_hex(cm_req + 3, 8);
+	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write!=-1) {
+	  cfs_write(fd_write, cm_req + 3, 8);
+	  cfs_close(fd_write);
+	} else {
+	  printf("Error: could not write nonce2 to storage.\n");
+	}
 	//Ticket granting ticket (26 bytes)
 	int fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
 	  cfs_read(fd_read, cm_req + 11, 26);
 	  cfs_close(fd_read);
 	} else {
-	  printf("ERROR: could not read ticket from memory.\n");
+	  printf("Error: could not read ticket from storage.\n");
 	}
 	//Generate AuthNM and add to byte array
 	//IDs
@@ -199,7 +217,7 @@ construct_cm_req(uint8_t *cm_req) {
 	   cfs_read(fd_read, cm_req + 39, 8);
 	   cfs_close(fd_read);
 	 } else {
-	   printf("ERROR: could not read noncescm from memory.\n");
+	   printf("Error: could not read noncescm from storage.\n");
 	 }
 	printf("Decrypted HID_ANS_REP, Noncescm + i: \n");
 //	full_print_hex(cm_req + 39, 8);
@@ -220,7 +238,7 @@ construct_cm_req(uint8_t *cm_req) {
 		cfs_read(fd_read, kscm, 16);
 		cfs_close(fd_read);
 	} else {
-		printf("ERROR: could not read kscm from memory.\n");
+		printf("Error: could not read kscm from storage.\n");
 	}
 
 	//Encrypt last 10 bytes of message
@@ -229,6 +247,198 @@ construct_cm_req(uint8_t *cm_req) {
 //	full_print_hex(cm_req, 47);
 //	printf("with Kscm: \n");
 //	full_print_hex(kscm, 16);
+}
+
+static uint8_t
+process_cm_rep(const uint8_t *data,
+        uint16_t datalen) {
+	const char * filename = "properties";
+	printf("HID_CM_REP content:\n");
+	uint8_t cm_rep[62];
+	memcpy(cm_rep, data, datalen);
+	full_print_hex(cm_rep, sizeof(cm_rep));
+
+	// Check IDs else return 0
+	if (cm_rep[1] != subject_id) {
+		printf("Error: wrong subject id.\n");
+		return 0;
+	}
+
+	// Store ticketR
+	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, cm_rep + 2, 26);
+		cfs_close(fd_write);
+		printf("Successfully written ticketR (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	  printf("Error: could not write ticketR to storage.\n");
+	}
+
+	// Get Kscm key from storage
+	uint8_t kscm[16];
+	int fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+		cfs_seek(fd_read, kscm_offset, CFS_SEEK_SET);
+		cfs_read(fd_read, kscm, 16);
+		cfs_close(fd_read);
+	} else {
+		printf("Error: could not read kscm from storage.\n");
+	}
+
+	// Decrypt last 34 bytes of message with Kscm
+	xcrypt_ctr(kscm, cm_rep + 37, 34);
+
+	// Get Nonce2 from storage
+	uint8_t nonce2[8];
+	fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+		cfs_seek(fd_read, nonce2_offset, CFS_SEEK_SET);
+		cfs_read(fd_read, nonce2, 8);
+		cfs_close(fd_read);
+	} else {
+		printf("Error: could not read nonce2 from storage.\n");
+	}
+
+	// Check Nonce2 else return 0
+	if (memcmp(cm_rep + 52, nonce2, 8) != 0) {
+		printf("Error: not the nonce2 that I sent in HID_CM_REQ.\n");
+		printf("From message\n");
+		full_print_hex(cm_rep + 52, 8);
+		printf("From storage\n");
+		full_print_hex(nonce2, 8);
+		return 0;
+	}
+
+	// Store Ksr
+	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, cm_rep + 28, 16);
+		cfs_close(fd_write);
+		printf("Successfully written Ksr (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	  printf("Error: could not write Ksr to storage.\n");
+	}
+
+	// Store Noncesr
+	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, cm_rep + 44, 8);
+		cfs_close(fd_write);
+		printf("Successfully written nonceSR (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	  printf("Error: could not write nonceSR to storage.\n");
+	}
+	return 1;
+}
+
+static void
+construct_s_r_req(uint8_t *s_r_req) {
+	printf("Constructing HID_S_R_REQ.\n");
+	const char * filename = "properties";
+	// Put ticketR in message from storage
+	int fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+		cfs_seek(fd_read, ticketr_offset, CFS_SEEK_SET);
+		cfs_read(fd_read, s_r_req, 26);
+		cfs_close(fd_read);
+	} else {
+		printf("Error: could not read ticketR from storage.\n");
+	}
+
+	// Put IDs
+	s_r_req[26] = 0;
+	s_r_req[27] = subject_id;
+
+	// Get nonceSR from storage into message
+	fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+		cfs_seek(fd_read, nonce_sr_offset, CFS_SEEK_SET);
+		cfs_read(fd_read, s_r_req + 28, 8);
+		cfs_close(fd_read);
+	} else {
+		printf("Error: could not read nonceSR from storage.\n");
+	}
+
+	// Generate session key to propose (16 bytes)
+	uint8_t start_of_key = 36;
+	uint16_t part_of_nonce = random_rand();
+	s_r_req[start_of_key] = (part_of_nonce >> 8);
+	s_r_req[1 + start_of_key] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[2 + start_of_key] = (part_of_nonce >> 8);
+	s_r_req[3 + start_of_key] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[4 + start_of_key] = (part_of_nonce >> 8);
+	s_r_req[5 + start_of_key] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[6 + start_of_key] = (part_of_nonce >> 8);
+	s_r_req[7 + start_of_key] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[8] = (part_of_nonce >> 8);
+	s_r_req[9 + start_of_key] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[10 + start_of_key] = (part_of_nonce >> 8);
+	s_r_req[11 + start_of_key] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[12 + start_of_key] = (part_of_nonce >> 8);
+	s_r_req[13 + start_of_key] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[14 + start_of_key] = (part_of_nonce >> 8);
+	s_r_req[15 + start_of_key] = part_of_nonce & 0xffff;
+
+	// Store session key
+	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, s_r_req + start_of_key, 16);
+		cfs_close(fd_write);
+		printf("Successfully written Subkey (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	  printf("Error: could not write Subkey to storage.\n");
+	}
+
+	// Get encryption key from storage
+	uint8_t k_sr[16];
+	fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+		cfs_seek(fd_read, k_sr_offset, CFS_SEEK_SET);
+		cfs_read(fd_read, k_sr, 16);
+		cfs_close(fd_read);
+	} else {
+		printf("Error: could not read Ksr from storage.\n");
+	}
+
+	// Encrypt these 26 bytes (ID + Nonce + Key)
+	xcrypt_ctr(k_sr, s_r_req + 26, 26);
+
+	// Generate nonce4
+	uint8_t start_of_nonce = 52;
+	part_of_nonce = random_rand();
+	s_r_req[start_of_nonce] = (part_of_nonce >> 8);
+	s_r_req[1 + start_of_nonce] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[2 + start_of_nonce] = (part_of_nonce >> 8);
+	s_r_req[3 + start_of_nonce] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[4 + start_of_nonce] = (part_of_nonce >> 8);
+	s_r_req[5 + start_of_nonce] = part_of_nonce & 0xffff;
+	part_of_nonce = random_rand();
+	s_r_req[6 + start_of_nonce] = (part_of_nonce >> 8);
+	s_r_req[7 + start_of_nonce] = part_of_nonce & 0xffff;
+
+	// Store nonce4
+	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, s_r_req + start_of_nonce, 8);
+		cfs_close(fd_write);
+		printf("Successfully written Nonce4 (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	  printf("Error: could not write Nonce4 to storage.\n");
+	}
 }
 
 static void
@@ -264,8 +474,16 @@ receiver_acs(struct simple_udp_connection *c,
 				printf("Error: wrong subject id %d\n", get_char_from(8, data));
 			}
 		} else {
-			// Perform phase 3, the access request
-			send_access_request();
+			//Receive last step in phase 2
+			if (process_cm_rep(data, datalen) != 0) {
+				//Perform the phase 3 exchange with the resource
+				uint8_t response[60];
+				construct_s_r_req(response);
+				//Send message to credential manager
+//				simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
+			} else {
+				printf("Error while processing HID_CM_REP\n");
+			}
 		}
 	} else {
 		printf("Unexpected message from ACS\n");
@@ -361,7 +579,7 @@ test_file_operations() {
 	  cfs_close(fd_write);
 	  printf("step 2: successfully written to cfs. wrote %i bytes\n", n);
 	} else {
-	  printf("ERROR: could not write to memory in step 2.\n");
+	  printf("Error: could not write to memory in step 2.\n");
 	}
 	/* step 3 */
 	/* reading from cfs */
@@ -372,7 +590,7 @@ test_file_operations() {
 	  printf("step 3: %s\n", buf);
 	  cfs_close(fd_read);
 	} else {
-	  printf("ERROR: could not read from memory in step 3.\n");
+	  printf("Error: could not read from memory in step 3.\n");
 	}
 
 	strcpy(message,"#1.hello test.");
@@ -382,7 +600,7 @@ test_file_operations() {
 	   cfs_close(fd_write);
 	   printf("step 4: successfully appended data to cfs. wrote %i bytes\n",n);
 	 } else {
-	   printf("ERROR: could not write to memory in step 4.\n");
+	   printf("Error: could not write to memory in step 4.\n");
 	 }
 	strcpy(buf,"empty string");
 	fd_read = cfs_open(filename, CFS_READ);
@@ -401,7 +619,7 @@ test_file_operations() {
 	   printf("step 5: #2 - %s\n", buf);
 	   cfs_close(fd_read);
 	 } else {
-	   printf("ERROR: could not read from memory in step 5.\n");
+	   printf("Error: could not read from memory in step 5.\n");
 	 }
 	/*        */
 	/* step 6 */
@@ -412,7 +630,7 @@ test_file_operations() {
 	if(fd_read == -1) {
 	printf("Successfully removed file\n");
 	} else {
-	printf("ERROR: could read from memory in step 6.\n");
+	printf("Error: could read from memory in step 6.\n");
 	}
 }
 
@@ -448,6 +666,8 @@ PROCESS_THREAD(hidra_subject, ev, data)
 			else if (!security_association_established) {
 				printf("Starting Hidra Protocol\n");
 				start_hidra_protocol();
+			} else {
+				send_access_request();
 			}
 		}
 	}
