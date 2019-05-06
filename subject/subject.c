@@ -96,23 +96,11 @@ receiver_resource(struct simple_udp_connection *c,
 }
 
 static void
-send_access_request(void) { //TODO encrypted with K(s,r) and/or rather authenticated with MAC?
-	//Content of access request, all full bytes for simplicity
-	// = id (1 byte) + action (1 byte) + system_reference (1 byte)
-	const char action =  2;//PUT
-	const char function =  18;
-	const char response[3] = {subject_id, action, function};
-	//TODO als dit opeens niet meer werkt, zie sizeof() -> strlen() ?
-	simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
-	resource_access_requested = 1;
-}
-
-static void
 process_ans_rep(const uint8_t *data,
         uint16_t datalen) {
 	const char * filename = "properties";
 	printf("HID_ANS_REP content:\n");
-	uint8_t ans_rep[62];
+	static uint8_t ans_rep[62];
 	memcpy(ans_rep, data, datalen);
 	full_print_hex(ans_rep, sizeof(ans_rep));
 
@@ -192,10 +180,12 @@ construct_cm_req(uint8_t *cm_req) {
 	full_print_hex(cm_req + 3, 8);
 	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
 	if(fd_write!=-1) {
-	  cfs_write(fd_write, cm_req + 3, 8);
+	  int n = cfs_write(fd_write, cm_req + 3, 8);
 	  cfs_close(fd_write);
+	printf("Successfully written Nonce2 (%i bytes) to %s\n", n, filename);
+	printf("\n");
 	} else {
-	  printf("Error: could not write nonce2 to storage.\n");
+	  printf("Error: could not write Nonce2 to storage.\n");
 	}
 	//Ticket granting ticket (26 bytes)
 	int fd_read = cfs_open(filename, CFS_READ);
@@ -254,7 +244,7 @@ process_cm_rep(const uint8_t *data,
         uint16_t datalen) {
 	const char * filename = "properties";
 	printf("HID_CM_REP content:\n");
-	uint8_t cm_rep[62];
+	static uint8_t cm_rep[62];
 	memcpy(cm_rep, data, datalen);
 	full_print_hex(cm_rep, sizeof(cm_rep));
 
@@ -287,7 +277,7 @@ process_cm_rep(const uint8_t *data,
 	}
 
 	// Decrypt last 34 bytes of message with Kscm
-	xcrypt_ctr(kscm, cm_rep + 37, 34);
+	xcrypt_ctr(kscm, cm_rep + 28, 34);
 
 	// Get Nonce2 from storage
 	uint8_t nonce2[8];
@@ -297,12 +287,12 @@ process_cm_rep(const uint8_t *data,
 		cfs_read(fd_read, nonce2, 8);
 		cfs_close(fd_read);
 	} else {
-		printf("Error: could not read nonce2 from storage.\n");
+		printf("Error: could not read Nonce2 from storage.\n");
 	}
 
 	// Check Nonce2 else return 0
 	if (memcmp(cm_rep + 52, nonce2, 8) != 0) {
-		printf("Error: not the nonce2 that I sent in HID_CM_REQ.\n");
+		printf("Error: not the Nonce2 that I sent in HID_CM_REQ.\n");
 		printf("From message\n");
 		full_print_hex(cm_rep + 52, 8);
 		printf("From storage\n");
@@ -465,10 +455,15 @@ receiver_acs(struct simple_udp_connection *c,
 				//Process message from authentication server
 				process_ans_rep(data, datalen);
 				//Construct message for credential manager
-				uint8_t response[47];
+				static uint8_t response[47];
 				construct_cm_req(response);
 				//Send message to credential manager
-				simple_udp_sendto(&unicast_connection_acs, response, sizeof(response), &acs_addr);
+				uint8_t result = simple_udp_sendto(&unicast_connection_acs, response, sizeof(response), &acs_addr);
+				if (result == 0) {
+					printf("Sent HID_CM_REQ\n");
+				} else {
+					printf("Error: sending HID_CM_REQ\n");
+				}
 				credentials_requested = 1;
 			} else {
 				printf("Error: wrong subject id %d\n", get_char_from(8, data));
@@ -476,11 +471,16 @@ receiver_acs(struct simple_udp_connection *c,
 		} else {
 			//Receive last step in phase 2
 			if (process_cm_rep(data, datalen) != 0) {
-				//Perform the phase 3 exchange with the resource
-				uint8_t response[60];
+				//Perform phase 3 exchange with resource
+				static uint8_t response[60];
 				construct_s_r_req(response);
 				//Send message to credential manager
-//				simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
+				uint8_t result = simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
+				if (result == 0) {
+					printf("Sent HID_S_R_REQ\n");
+				} else {
+					printf("Error: sending HID_S_R_REQ\n");
+				}
 			} else {
 				printf("Error while processing HID_CM_REP\n");
 			}
@@ -523,6 +523,23 @@ start_hidra_protocol(void) {
 
 	simple_udp_sendto(&unicast_connection_acs, ans_request, sizeof(ans_request), &acs_addr);
 	authentication_requested = 1;
+}
+
+static void
+send_access_request(void) { //TODO encrypted with K(s,r) and/or rather authenticated with MAC? -> encrypt(message + hash(message)) using subkey
+	//Content of access request, all full bytes for simplicity
+	// = id (1 byte) + action (1 byte) + system_reference (1 byte) ( + inputs)
+	const char action =  2;//PUT
+	const char function =  18;
+	// input existence boolean: if input exists, first bit is set to 1 and input couples <type,value> follow
+	//TODO => minstens 4 bytes, remember.
+	const char input_existence = 0;
+	const char attribute = 0;
+	const char response[3] = {subject_id, action, function};
+
+	//TODO nieuwe hmac/hash van alles, maar subject id niet encrypteren, anders heeft resource geen idee welke sleutel te gebruiken
+	simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
+	resource_access_requested = 1;
 }
 
 static void
@@ -661,7 +678,9 @@ PROCESS_THREAD(hidra_subject, ev, data)
 
 		if ((ev==sensors_event) && (data == &button_sensor)) {
 			if (testing) {
-				test_file_operations();
+//				test_file_operations();
+//				static uint8_t response[80];
+//				simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
 			}
 			else if (!security_association_established) {
 				printf("Starting Hidra Protocol\n");

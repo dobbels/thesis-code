@@ -5,20 +5,28 @@ uint8_t
 get_mask_for(int nb_of_bits) {
 	char mask = 0;
 	if (nb_of_bits == 1) {
+		/* 0b00000001 */
 		mask = 0x01;
 	} else if (nb_of_bits == 2) {
+		/* 0b00000011 */
 		mask = 0x03;
 	} else if (nb_of_bits == 3) {
+		/* 0b00000111 */
 		mask = 0x07;
 	} else if (nb_of_bits == 4) {
+		/* 0b00001111 */
 		mask = 0x0f;
 	} else if (nb_of_bits == 5) {
+		/* 0b00011111 */
 		mask = 0x1f;
 	} else if (nb_of_bits == 6) {
+		/* 0b00111111 */
 		mask = 0x3f;
 	} else if (nb_of_bits == 7) {
+		/* 0b01111111 */
 		mask = 0x7f;
 	} else if (nb_of_bits == 8) {
+		/* 0b11111111 */
 		mask = 0xff;
 	}
 	return mask;
@@ -77,15 +85,6 @@ get_int16_from(int index, const uint8_t *data) {
 			(get_char_from(index+8, data) & 0xff));
 	printf("%d\n", result);
 	return result;
-}
-
-float
-get_float_from(int index, const uint8_t *data) {
-	int32_t result = (((int32_t)get_char_from(index, data)) & 0xff) << 24 |
-				((int32_t)get_char_from(index+8, data)  & 0xff) << 16 |
-				(get_char_from(index+16, data)  & 0xff) << 8 |
-				(get_char_from(index+24, data) & 0xff);
-	return *((float*)&result);
 }
 
 void

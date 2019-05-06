@@ -458,15 +458,11 @@ print_attribute(const uint8_t *data, int bit_index)
 		// type : INTEGER
 		int int_value = get_int16_from(bit_index, data);
 		bit_index += 16;
-		// TODO hidra-r.c:450:3: warning: format ‘%d’ expects argument of type ‘int’, but argument 2 has type ‘int32_t’ [-Wformat]
 		printf("attr->int_value : %d\n", int_value);
 	} else if (type == 3) {
 		// type : FLOAT
-		printf("Warning: Float not yet supported by policy\n");
-		float float_value = get_float_from(bit_index, data);
+		printf("Warning: Float not supported by policy\n");
 		bit_index += 32;
-		// TODO hidra-r.c:456:3: warning: format ‘%f’ expects argument of type ‘double’, but argument 2 has type ‘float’ [-Wformat]
-//		printf("attr->float_value : %f\n", attr->float_value);
 	} else if (type == 4) {
 		// type : STRING
 		int nb_of_characters = get_3_bits_from(bit_index, data);

@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 //#include "policy.h"
 #include "encoded_policy.h"
@@ -39,18 +40,19 @@
 #define MAX_NUMBER_OF_SUBJECTS 3
 
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
-uint8_t same_mac(uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes);
+uint8_t same_mac(const uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes);
 
 static struct simple_udp_connection unicast_connection_acs;
 static struct simple_udp_connection unicast_connection_subject;
 
 uip_ipaddr_t resource_addr;
 
-const uint8_t resource_key[16] =
+uint8_t resource_key[16] =
 	{ (uint8_t) 0x2b, (uint8_t) 0x7e, (uint8_t) 0x15, (uint8_t) 0x16,
 		(uint8_t) 0x28, (uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x2b,
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
 		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
+
 
 //General file structure is a concatenation of: //TODO dit kan veel beter door ze hier te declareren en in het programma te initialiseren. Dan kan je wel relatief tov elkaar indexen
 //Current last one-way key chain value Kr,cm
@@ -62,8 +64,8 @@ uint8_t nonce3_offset = 17;
 
 uint8_t any_previous_key_chain_value_stored = 0;
 
-static void full_print_hex(uint8_t* str, uint8_t length);
-static void print_hex(uint8_t* str, uint8_t len);
+static void full_print_hex(const uint8_t* str, uint8_t length);
+static void print_hex(const uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
 uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_len);
 
@@ -240,7 +242,6 @@ get_reference(uint8_t function)
 static uint8_t
 execute(uint8_t function)
 {
-//	printf("Printing function %d\n", function);
 	uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
 	if (*func_ptr == NULL) {
 		printf("Something went wrong executing a function pointer.\n");
@@ -444,10 +445,8 @@ perform_task(uint8_t *policy, int task_bit_index)
 	printf("Error processing task %d.\n", function);
 }
 
-static void
-handle_subject_access_request(struct simple_udp_connection *c,
-		const uip_ipaddr_t *sender_addr,
-		const uint8_t *data,
+static uint8_t
+handle_subject_access_request(const uint8_t *data,
         uint16_t datalen,
         uint8_t sub_id,
         int bit_index)
@@ -465,8 +464,7 @@ handle_subject_access_request(struct simple_udp_connection *c,
 		printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
 	} else {
 		printf("Did not receive the expected demo-request.\n");
-		send_nack(c, sender_addr);
-		return;
+		return 0;
 	}
 
 	// Search for first policy associated with this subject
@@ -529,26 +527,99 @@ handle_subject_access_request(struct simple_udp_connection *c,
 
 			execute(function);
 
-			send_ack(c, sender_addr);
-
-			set_hid_s_r_req_success(sub_id, 1);
-
 			// Let's assume this operation requires a lot of battery
 			if (battery_level > 50) {
 				battery_level -= 50;
 				printf("new battery level: %d\n", battery_level);
 			}
+			return 1;
 		} else {
 			printf("Request denied, because not all rules check out.\n");
-			send_nack(c, sender_addr);
+			return 0;
 		}
 
 	} else {
 		// deny if no association with subject exists
 		printf("Request denied, because no association with this subject exists.\n");
-		send_nack(c, sender_addr);
+		return 0;
 	}
-	printf("End of Hidra exchange with Subject\n");
+}
+
+static uint8_t
+process_s_r_req(const uint8_t *data,
+		uint16_t datalen) {
+	const char * filename = "properties";
+	static uint8_t s_r_req[60];
+	printf("datalen %d == 60?\n", datalen);
+	memcpy(s_r_req, data, 60);
+	printf("Full HID_S_R_REQ message: \n");
+	full_print_hex(s_r_req, sizeof(s_r_req));
+
+	//Decrypt Ticket with resource key
+	xcrypt_ctr(resource_key, s_r_req, 26);
+
+	//Check subject id for association existence and protocol progress
+	uint8_t subject_id = s_r_req[17];
+	if (is_already_associated(subject_id) && hid_cm_ind_success(subject_id) && fresh_information(subject_id)) {
+		// Assumption: no access control attributes to check
+
+		// Use Ksr to decrypt AuthNr
+		xcrypt_ctr(s_r_req, s_r_req + 26, 26);
+
+		// Check NonceSR from AuthNr against stored value
+		uint8_t nonce_sr_from_storage[8];
+		int fd_read = cfs_open(filename, CFS_READ);
+		if(fd_read != -1) {
+			cfs_read(fd_read, nonce_sr_from_storage, 8);
+			cfs_close(fd_read);
+		} else {
+		   printf("Error: could not read NonceSR from memory.\n");
+		}
+
+		if (memcmp(nonce_sr_from_storage, s_r_req + 28, 8) != 0) {
+			printf("Error: wrong NonceSR in AuthNr.\n");
+			return 0;
+		}
+
+		// Check NonceSR in the ticket against this same value
+		if (memcmp(nonce_sr_from_storage, s_r_req + 18, 8) != 0){
+			printf("Error: wrong NonceSR in ticketR.\n");
+			return 0;
+		}
+
+		// Check subject id again
+		if (memcmp(&subject_id, s_r_req + 27, 1) != 0) {
+			printf("Error: wrong subject id in AuthNr.\n");
+			return 0;
+		}
+
+		// Accept and store subkey/session key (in memory allocated for this subject)
+		int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+		if (fd_write != -1) {
+			int n = cfs_write(fd_write, s_r_req + 36, 16);
+			cfs_close(fd_write);
+			printf("Successfully written Subkey (%i bytes) to %s\n", n, filename);
+			printf("\n");
+		} else {
+		   printf("Error: could not write Subkey to memory.\n");
+		}
+
+		// Store Nonce4
+		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+		if (fd_write != -1) {
+			int n = cfs_write(fd_write, s_r_req + 52, 8);
+			cfs_close(fd_write);
+			printf("Successfully written Nonce4 (%i bytes) to %s\n", n, filename);
+			printf("\n");
+		} else {
+		   printf("Error: could not write Nonce4 to memory.\n");
+		}
+
+		set_hid_s_r_req_success(subject_id, 1);
+		return 1;
+	} else {
+		return 0;
+	}
 }
 
 static void
@@ -560,22 +631,36 @@ receiver_subject(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
-  printf("\nData received from: ");
-  PRINT6ADDR(sender_addr);
-  printf("\nAt port %d from port %d with length %d\n",
+	printf("\nData received from: ");
+	PRINT6ADDR(sender_addr);
+	printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
-//  printf("Data Rx: %.*s\n", datalen, data);
 
-  int bit_index = 0;
-  uint8_t subject_id = get_char_from(bit_index, data);
-  bit_index += 8;
+	// Rough demo separator between access request and key establishment request
+	if (datalen > 20) {
+		//TODO handle response
+		if (process_s_r_req(data, datalen)) {
+			printf("Constructing HID_S_R_REP message\n");
+			// construct_s_r_rep message
 
-  if (is_already_associated(subject_id) && !hid_s_r_req_success(subject_id) && hid_cm_ind_success(subject_id) && fresh_information(subject_id)) {
-	  handle_subject_access_request(c, sender_addr, data, datalen, subject_id, bit_index);
-  } else {
-	  printf("Request denied, because no association with this subject exists.\n");
-	  send_nack(c, sender_addr);
-  }
+			// send this message
+
+		}
+	} else {
+		uint8_t subject_id = data[0];
+		int bit_index = 500;
+		//TODO check nog booleans, maar lijkt wel te kloppen?
+		if (is_already_associated(subject_id) && hid_s_r_req_success(subject_id) && fresh_information(subject_id)) {
+			if (handle_subject_access_request(data, datalen, subject_id, bit_index)){
+				send_ack(c, sender_addr);
+			} else {
+				send_nack(c, sender_addr);
+			}
+		} else {
+			printf("Request denied, because no association with this subject exists.\n");
+			send_nack(c, sender_addr);
+		}
+	}
 }
 
 static void
@@ -627,19 +712,19 @@ construct_cm_ind_req(uint8_t *cm_ind_req) {
 	full_print_hex(cm_ind_req+10, 4);
 }
 
-static void
-process_cm_ind(struct simple_udp_connection *c,
-		const uip_ipaddr_t *sender_addr,
-		uint8_t subject_id,
+static uint8_t
+process_cm_ind(uint8_t subject_id,
 		const uint8_t *data,
 		uint16_t datalen) {
 	const char * filename = "properties";
-	uint8_t cm_ind[datalen];
+	// Enough room for a 40 byte policy
+	static uint8_t cm_ind[73];
 	printf("datalen %d, so policy is of length %d\n", datalen, datalen - 33);
 	memcpy(cm_ind, data, datalen);
 	printf("Full HID_CM_IND message: \n");
 	full_print_hex(cm_ind, sizeof(cm_ind));
 
+	uint8_t need_to_request_next_key = 0;
 
 	if(same_mac(cm_ind + datalen - 4, cm_ind + 2, datalen - 6)) {
 		if (nb_of_associated_subjects >= 10) {
@@ -710,13 +795,7 @@ process_cm_ind(struct simple_udp_connection *c,
 			} else {
 			   printf("Error: could not write subject id to memory.\n");
 			}
-
-			//Request previous key chain value at credential manager
-			uint8_t response[14];
-			construct_cm_ind_req(response);
-			//Send message to credential manager
-			simple_udp_sendto(c, response, sizeof(response), sender_addr);
-
+			need_to_request_next_key = 1;
 		} else {
 
 			//This is not handled in the demo
@@ -730,17 +809,15 @@ process_cm_ind(struct simple_udp_connection *c,
 	} else {
 		printf("Incorrect MAC code\n");
 	}
+	return need_to_request_next_key;
 }
 
-static void
-process_cm_ind_rep(struct simple_udp_connection *c,
-		const uip_ipaddr_t *sender_addr,
-		const uint8_t *data,
+static uint8_t
+process_cm_ind_rep(const uint8_t *data,
 		uint16_t datalen) {
 	const char * filename = "properties";
 	printf("datalen %d == 22?\n", datalen);
-	printf("Full HID_CM_IND_REP message: \n");
-	full_print_hex(data, datalen);
+	printf("Processing HID_CM_IND_REP message\n");
 
 	// MAC calculation
 	uint8_t for_mac[4];
@@ -757,9 +834,9 @@ process_cm_ind_rep(struct simple_udp_connection *c,
 
 	if(same_mac(data + 18, for_mac, 4)) {
 		//Check key chain value with stored value
-		uint8_t new_key[16];
+		static uint8_t new_key[16];
 		memcpy(new_key, data + 2, 16);
-		uint8_t old_key[16];
+		static uint8_t old_key[16];
 		fd_read = cfs_open(filename, CFS_READ);
 		if(fd_read!=-1) {
 		  cfs_read(fd_read, old_key, 16);
@@ -783,23 +860,19 @@ process_cm_ind_rep(struct simple_udp_connection *c,
 				cfs_close(fd_read);
 				printf("Setting freshness of subject %d\n", subject_id);
 				set_fresh_information(subject_id, 1);
-				send_ack(c, sender_addr);
+				return 1;
 			} else {
 				printf("Error: could not read subect id from memory.\n");
-				send_nack(c, sender_addr);
+				return 0;
 			}
 		} else {
 			printf("Error: Not a correct key, therefore subject information is not fresh \n");
-			send_nack(c, sender_addr);
+			return 0;
 		}
 	} else {
 		printf("Incorrect MAC code\n");
-		send_nack(c, sender_addr);
+		return 0;
 	}
-
-	//Clean up for next demo association (as it is at the moment)
-	any_previous_key_chain_value_stored = 0;
-	cfs_remove(filename);
 }
 
 static void
@@ -811,7 +884,16 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 	printf("Resource id 2 == %d \n", data[1]);
 
 	if (datalen < 33) {
-		process_cm_ind_rep(c, sender_addr, data, datalen);
+		if (process_cm_ind_rep(data, datalen)) {
+			send_ack(c, sender_addr);
+		} else {
+			send_nack(c, sender_addr);
+		}
+		//Clean up for next demo association (as it is at the moment)
+		any_previous_key_chain_value_stored = 0;
+
+		const char * filename = "properties";
+		cfs_remove(filename);
 		printf("\n");
 		printf("End of Hidra exchange with ACS\n");
 		return;
@@ -822,7 +904,15 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 
 	// If this is the first exchange with the ACS: extract subject id and policy
 	if (!is_already_associated(subject_id)) {
-		process_cm_ind(c, sender_addr, subject_id, data, datalen);
+		if (process_cm_ind(subject_id, data, datalen)) {
+			//Request previous key chain value at credential manager
+			static uint8_t response[14];
+			construct_cm_ind_req(response);
+			//Send message to credential manager
+			simple_udp_sendto(c, response, sizeof(response), sender_addr);
+		} else {
+			printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
+		}
 	}
 	else {
 		printf("Did not receive from ACS what was expected in the protocol.\n");
@@ -873,7 +963,6 @@ receiver_acs(struct simple_udp_connection *c,
   PRINT6ADDR(sender_addr);
   printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
-//  printf("Data Rx: %.*s\n", datalen, data);
   printf("\n");
   //The first byte indicates the purpose of this message from the trusted server
   if (data[0]) {
@@ -913,24 +1002,34 @@ set_global_address(void)
 
 void
 test_hmac() {
-	static const uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
-							0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x51,
-							0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
-	printf("Vector: \n");
-	full_print_hex(text, sizeof(text));
 
-	printf("Key: \n");
-	full_print_hex(resource_key, sizeof(resource_key));
+	static const uint8_t text[43] =
+	{
+			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
+			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
+			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd
+	};
+
+//	printf("Vector: \n");
+//	full_print_hex(text, sizeof(text));
+//
+//	printf("Key: \n");
+//	full_print_hex(resource_key, sizeof(resource_key));
 
 //	//Size : USHAMaxHashSize
-	static uint8_t digest[USHAMaxHashSize];
-//	//TODO process result code, should be 0
-	hmac (SHA1, text, sizeof(text), resource_key, sizeof(resource_key), digest);
+//	static uint8_t digest[USHAMaxHashSize];
+	static uint8_t digest[224];
+	static uint8_t result;
+	result = hmac (SHA224, text, sizeof(text), resource_key, sizeof(resource_key), digest);
+	if (result != 0) {
+		printf("Error: processing hmac. \n");
+	}
 
 	printf("HMAC_SHA_1: \n");
 	full_print_hex(digest, 20);
 
-	uint32_t hashed = murmur3_32(digest, 20, 17);
+	static uint32_t hashed;
+	hashed = murmur3_32(digest, 20, 17);
 	uint8_t hashed_array[4];
 	hashed_array[0] = (hashed >> 24) & 0xff;
 	hashed_array[1] = (hashed >> 16) & 0xff;
@@ -941,11 +1040,12 @@ test_hmac() {
 	full_print_hex(hashed_array, 4);
 }
 
+
 PROCESS_THREAD(hidra_r, ev, data)
 {
 	PROCESS_BEGIN();
 
-	SENSORS_ACTIVATE(button_sensor);
+//	SENSORS_ACTIVATE(button_sensor);
 
 	set_global_address();
 
@@ -962,14 +1062,10 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 	initialize_reference_table();
 
-	//Sorts of errors with hmac: reading outside memory, illegal out of bounds (on PROCESS_WAIT_EVENT/PROCESS_END), unreachable resource node -> maybe wait longer for RPL to converge?
-	//Also encountered these errors without hmac present?
-	test_hmac();
+//	test_hmac();
 
-	printf("Here 1\n");
 	while(1) {
 		PROCESS_WAIT_EVENT();
-		printf("Here 2\n");
 	}
 
 	PROCESS_END();
@@ -984,7 +1080,7 @@ static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 	AES_CTR_xcrypt_buffer(&ctx, in, length);
 }
 
-static void full_print_hex(uint8_t* str, uint8_t length) {
+static void full_print_hex(const uint8_t* str, uint8_t length) {
 	printf("********************************\n");
 	int i = 0;
 	for (; i < (length/16) ; i++) {
@@ -995,7 +1091,7 @@ static void full_print_hex(uint8_t* str, uint8_t length) {
 }
 
 // prints string as hex
-static void print_hex(uint8_t* str, uint8_t len)
+static void print_hex(const uint8_t* str, uint8_t len)
 {
     unsigned char i;
     for (i = 0; i < len; ++i)
@@ -1514,7 +1610,7 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 //Assumption about length of hash: 4
 //Quick fix: mac is hash of (resource_key | message)
 uint8_t
-same_mac(uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes) {
+same_mac(const uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes) {
 	uint8_t array_with_key[length_in_bytes + 16];
 	memcpy(array_with_key, resource_key, 16);
 	memcpy(array_with_key + 16, array_to_check, length_in_bytes);

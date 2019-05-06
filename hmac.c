@@ -43,7 +43,7 @@ int
 hmac (SHAversion whichSha, const unsigned char *text, int text_len,
       const unsigned char *key, int key_len, uint8_t digest[USHAMaxHashSize])
 {
-  HMACContext ctx;
+  static HMACContext ctx;
   return
 		  hmacReset (&ctx, whichSha, key, key_len)
 		  ||
@@ -78,7 +78,7 @@ int
 hmacReset (HMACContext * ctx, enum SHAversion whichSha,
 	   const unsigned char *key, int key_len)
 {
-  int i, blocksize, hashsize;
+  static int i, blocksize, hashsize;
 
   /* inner padding - key XORd with ipad */
   static unsigned char k_ipad[USHA_Max_Message_Block_Size];

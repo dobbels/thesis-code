@@ -13,8 +13,6 @@ uint8_t get_char_from(int index, const uint8_t *data);
 
 int16_t get_int16_from(int index, const uint8_t *data);
 
-float get_float_from(int index, const uint8_t *data);
-
 void print_bits(uint8_t data);
 
 #endif /* POLICY_H_INCLUDED */
