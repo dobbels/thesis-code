@@ -913,7 +913,7 @@ set_global_address(void)
 
 void
 test_hmac() {
-	const uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
+	static const uint8_t text[46] = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
 							0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x51,
 							0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
 	printf("Vector: \n");
@@ -923,7 +923,7 @@ test_hmac() {
 	full_print_hex(resource_key, sizeof(resource_key));
 
 //	//Size : USHAMaxHashSize
-	uint8_t digest[USHAMaxHashSize];
+	static uint8_t digest[USHAMaxHashSize];
 //	//TODO process result code, should be 0
 	hmac (SHA1, text, sizeof(text), resource_key, sizeof(resource_key), digest);
 
@@ -945,7 +945,7 @@ PROCESS_THREAD(hidra_r, ev, data)
 {
 	PROCESS_BEGIN();
 
-//	SENSORS_ACTIVATE(button_sensor);
+	SENSORS_ACTIVATE(button_sensor);
 
 	set_global_address();
 
@@ -965,10 +965,11 @@ PROCESS_THREAD(hidra_r, ev, data)
 	//Sorts of errors with hmac: reading outside memory, illegal out of bounds (on PROCESS_WAIT_EVENT/PROCESS_END), unreachable resource node -> maybe wait longer for RPL to converge?
 	//Also encountered these errors without hmac present?
 	test_hmac();
-	printf("Here \n");
+
+	printf("Here 1\n");
 	while(1) {
 		PROCESS_WAIT_EVENT();
-//		printf("Here \n");
+		printf("Here 2\n");
 	}
 
 	PROCESS_END();

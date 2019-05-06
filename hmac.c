@@ -81,10 +81,10 @@ hmacReset (HMACContext * ctx, enum SHAversion whichSha,
   int i, blocksize, hashsize;
 
   /* inner padding - key XORd with ipad */
-  unsigned char k_ipad[USHA_Max_Message_Block_Size];
+  static unsigned char k_ipad[USHA_Max_Message_Block_Size];
 
   /* temporary buffer when keylen > blocksize */
-  unsigned char tempkey[USHAMaxHashSize];
+  static unsigned char tempkey[USHAMaxHashSize];
 
   if (!ctx)
     return shaNull;
