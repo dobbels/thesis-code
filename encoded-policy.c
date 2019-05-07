@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "encoded_policy.h"
+#include "encoded-policy.h"
 
 void
 copy_policy(const uint8_t *data, int bit_index, uint8_t policy_size, uint8_t *destination)

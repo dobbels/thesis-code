@@ -43,7 +43,7 @@ int
 hmac (SHAversion whichSha, const unsigned char *text, int text_len,
       const unsigned char *key, int key_len, uint8_t digest[USHAMaxHashSize])
 {
-  static HMACContext ctx;
+  HMACContext ctx;
   return
 		  hmacReset (&ctx, whichSha, key, key_len)
 		  ||

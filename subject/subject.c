@@ -9,7 +9,7 @@
 
 #include "../tiny-AES-c/aes.h"
 
-#include "../byte_operations.h"
+#include "../bit-operations.h"
 
 // To print the IPv6 addresses in a friendlier way
 #include "debug.h"

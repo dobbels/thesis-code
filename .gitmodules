@@ -10,3 +10,6 @@
 [submodule "hmac-sha1"]
 	path = hmac-sha1
 	url = https://github.com/Akagi201/hmac-sha1.git
+[submodule "hmac"]
+	path = hmac
+	url = https://github.com/ogay/hmac.git
