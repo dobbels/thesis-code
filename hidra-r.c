@@ -24,8 +24,8 @@
 #include <stdint.h>
 
 //#include "policy.h"
-#include "encoded_policy.h"
-#include "byte_operations.h"
+#include "encoded-policy.h"
+#include "bit-operations.h"
 
 // To print the IPv6 addresses in a friendlier way
 #include "debug.h"
@@ -410,6 +410,21 @@ hid_cm_ind_req_success(uint8_t subject_id)
 	return result;
 }
 
+static void
+set_session_key(uint8_t subject_id, uint8_t * key)
+{	
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id) {
+			memcpy(
+				associated_subjects->subject_association_set[subject_index]->session_key, 
+				key,
+				16
+			);
+		}
+	}
+}
+
 static uint8_t
 condition_is_met(uint8_t *policy, int expression_bit_index)
 {
@@ -594,15 +609,7 @@ process_s_r_req(const uint8_t *data,
 		}
 
 		// Accept and store subkey/session key (in memory allocated for this subject)
-		int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-		if (fd_write != -1) {
-			int n = cfs_write(fd_write, s_r_req + 36, 16);
-			cfs_close(fd_write);
-			printf("Successfully written Subkey (%i bytes) to %s\n", n, filename);
-			printf("\n");
-		} else {
-		   printf("Error: could not write Subkey to memory.\n");
-		}
+		set_session_key(subject_id, s_r_req + 36);
 
 		// Store Nonce4
 		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
