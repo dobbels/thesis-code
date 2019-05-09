@@ -63,8 +63,8 @@ int subkey_offset = 108;
 //Nonce4
 int nonce4_offset = 124;
 
-static void full_print_hex(uint8_t* str, uint8_t length);
-static void print_hex(uint8_t* str, uint8_t len);
+static void full_print_hex(const uint8_t* str, uint8_t length);
+static void print_hex(const uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
 
@@ -89,6 +89,8 @@ receiver_resource(struct simple_udp_connection *c,
 	if (datalen > 1) {
 		uint8_t s_r_rep[32];
 		memcpy(s_r_rep, data, sizeof(s_r_rep));
+
+		const char * filename = "properties";
 
 		printf("Received HID_S_R_REP.\n");
 		//Decrypt message
@@ -589,8 +591,8 @@ start_hidra_protocol(void) {
 
 static void
 send_access_request(void) { //TODO encrypted with Subkey and/or rather authenticated with MAC? -> encrypt(message + hash(message)) using subkey
-	const uint8_t response[8];
-
+	uint8_t response[8];
+	const char *filename = "properties";
 	//Content of access request, all full bytes for simplicity
 	// = id (1 byte) + action (1 byte) + function:system_reference (1 byte) + input existence (1 bit) ( + inputs) + padding + hash (4 bytes)
 	response[0] = subject_id;
@@ -786,7 +788,7 @@ static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 	AES_CTR_xcrypt_buffer(&ctx, in, length);
 }
 
-static void full_print_hex(uint8_t* str, uint8_t length) {
+static void full_print_hex(const uint8_t* str, uint8_t length) {
 	int i = 0;
 	for (; i < (length/16) ; i++) {
 		print_hex(str + i * 16, 16);
@@ -796,7 +798,7 @@ static void full_print_hex(uint8_t* str, uint8_t length) {
 }
 
 // prints string as hex
-static void print_hex(uint8_t* str, uint8_t len)
+static void print_hex(const uint8_t* str, uint8_t len)
 {
     unsigned char i;
     for (i = 0; i < len; ++i)

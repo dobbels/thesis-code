@@ -504,14 +504,17 @@ handle_subject_access_request(const uint8_t *data,
 		printf("Error: retrieving session key");
 	}
 
+	//Assumption: access request is not longer than 73 bytes
+	memcpy(messaging_buffer, data, datalen);
+
 	//Decrypt whole message
-	xcrypt_ctr(session_key, data, datalen);
+	xcrypt_ctr(session_key, messaging_buffer, datalen);
 
 	//Check validity
 	uint32_t hashed;
 	hashed = murmur3_32(data, 3, 17);
-	if ((data[3] == (hashed >> 24) & 0xff) && (data[4] = (hashed >> 16) & 0xff) &&
-	(data[5] = (hashed >> 8)  & 0xff) && (data[6] = hashed & 0xff)) {
+	if ((data[3] == (hashed >> 24) & 0xff) && (data[4] == (hashed >> 16) & 0xff) &&
+	(data[5] == (hashed >> 8)  & 0xff) && (data[6] == hashed & 0xff)) {
 		//Expected demo format: Action: PUT + Task: light_switch_x TODO is veranderd!
 		uint8_t action = data[0];
 		uint8_t function = data[1];

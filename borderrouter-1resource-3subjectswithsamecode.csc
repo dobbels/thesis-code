@@ -157,8 +157,8 @@
       <breakpoints />
       <interface_config>
         org.contikios.cooja.interfaces.Position
-        <x>86.14438474882998</x>
-        <y>35.69773114913606</y>
+        <x>72.72374380194327</x>
+        <y>41.72332504365662</y>
         <z>0.0</z>
       </interface_config>
       <interface_config>
@@ -192,7 +192,7 @@
       <viewport>3.651092387757152 0.0 0.0 3.651092387757152 7.84252895915995 -33.834876615117366</viewport>
     </plugin_config>
     <width>400</width>
-    <z>6</z>
+    <z>1</z>
     <height>400</height>
     <location_x>1</location_x>
     <location_y>1</location_y>
@@ -205,29 +205,10 @@
       <coloring />
     </plugin_config>
     <width>1451</width>
-    <z>4</z>
+    <z>3</z>
     <height>240</height>
     <location_x>400</location_x>
     <location_y>160</location_y>
-  </plugin>
-  <plugin>
-    org.contikios.cooja.plugins.TimeLine
-    <plugin_config>
-      <mote>0</mote>
-      <mote>1</mote>
-      <mote>2</mote>
-      <mote>3</mote>
-      <mote>4</mote>
-      <showRadioRXTX />
-      <showRadioHW />
-      <showLEDs />
-      <zoomfactor>500.0</zoomfactor>
-    </plugin_config>
-    <width>1851</width>
-    <z>10</z>
-    <height>166</height>
-    <location_x>0</location_x>
-    <location_y>696</location_y>
   </plugin>
   <plugin>
     org.contikios.cooja.plugins.Notes
@@ -277,7 +258,7 @@
       <analyzers name="6lowpan-pcap" />
     </plugin_config>
     <width>1491</width>
-    <z>3</z>
+    <z>5</z>
     <height>300</height>
     <location_x>360</location_x>
     <location_y>399</location_y>
@@ -290,7 +271,7 @@
       <scrollpos>0,0</scrollpos>
     </plugin_config>
     <width>350</width>
-    <z>1</z>
+    <z>2</z>
     <height>120</height>
     <location_x>680</location_x>
     <location_y>1</location_y>
@@ -303,7 +284,7 @@
       <scrollpos>0,0</scrollpos>
     </plugin_config>
     <width>350</width>
-    <z>2</z>
+    <z>4</z>
     <height>120</height>
     <location_x>1030</location_x>
     <location_y>1</location_y>
@@ -316,7 +297,7 @@
       <scrollpos>0,0</scrollpos>
     </plugin_config>
     <width>350</width>
-    <z>5</z>
+    <z>6</z>
     <height>118</height>
     <location_x>1379</location_x>
     <location_y>3</location_y>
