@@ -16,9 +16,15 @@
 
 #include "tiny-AES-c/aes.h"
 
-#include "sha.h"
+#include "tinycrypt/lib/include/tinycrypt/hmac.h"
+#include "tinycrypt/lib/include/tinycrypt/sha256.h"
+#include "tinycrypt/lib/include/tinycrypt/constants.h"
+#include "tinycrypt/lib/include/tinycrypt/utils.h"
+//#include "tinycrypt/tests/include/test_utils.h"
 
-#include "hmac/hmac_sha2.h"
+//#include "sha.h"
+
+//#include "hmac/hmac_sha2.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -29,10 +35,13 @@
 #include "encoded-policy.h"
 #include "bit-operations.h"
 
+
+
+
 // To print the IPv6 addresses in a friendlier way
-#include "debug.h"
-#define DEBUG DEBUG_PRINT
-#include "net/ip/uip-debug.h"
+//#include "debug.h"
+//#define DEBUG DEBUG_PRINT
+//#include "net/ip/uip-debug.h"
 
 //#include "hmac-sha1.h"
 
@@ -55,6 +64,7 @@ uint8_t resource_key[16] =
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
 		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
 
+uint8_t messaging_buffer[73];
 
 //General file structure is a concatenation of: //TODO dit kan veel beter door ze hier te declareren en in het programma te initialiseren. Dan kan je wel relatief tov elkaar indexen
 //Current last one-way key chain value Kr,cm
@@ -260,9 +270,7 @@ static void
 send_nack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr)
 {
-	printf("Sending NACK to \n");
-	uip_debug_ipaddr_print(sender_addr);
-	printf("\n");
+	printf("Sending NACK \n");
 
 	const char response = 0;
 	simple_udp_sendto(c, &response, 1, sender_addr);
@@ -277,8 +285,6 @@ send_ack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr)
 {
 	printf("Sending ACK to \n");
-	uip_debug_ipaddr_print(sender_addr);
-	printf("\n");
 
 	const char response = 1;
 	simple_udp_sendto(c, &response, 1, sender_addr);
@@ -468,7 +474,7 @@ handle_subject_access_request(const uint8_t *data,
         uint8_t sub_id,
         int bit_index)
 {
-	//Expected demo format: Action: PUT + Task: light_switch_x
+	//Expected demo format: Action: PUT + Task: light_switch_x TODO is veranderd!
 	uint8_t action = get_char_from(bit_index, data);
 	bit_index += 8;
 	uint8_t function = get_char_from(bit_index, data);
@@ -566,22 +572,22 @@ static uint8_t
 process_s_r_req(const uint8_t *data,
 		uint16_t datalen) {
 	const char * filename = "properties";
-	static uint8_t s_r_req[60];
+//	static uint8_t messaging_buffer[60];
 	printf("datalen %d == 60?\n", datalen);
-	memcpy(s_r_req, data, 60);
+	memcpy(messaging_buffer, data, 60);
 	printf("Full HID_S_R_REQ message: \n");
-	full_print_hex(s_r_req, sizeof(s_r_req));
+	full_print_hex(messaging_buffer, sizeof(messaging_buffer));
 
 	//Decrypt Ticket with resource key
-	xcrypt_ctr(resource_key, s_r_req, 26);
+	xcrypt_ctr(resource_key, messaging_buffer, 26);
 
 	//Check subject id for association existence and protocol progress
-	uint8_t subject_id = s_r_req[17];
+	uint8_t subject_id = messaging_buffer[17];
 	if (is_already_associated(subject_id) && hid_cm_ind_success(subject_id) && fresh_information(subject_id)) {
 		// Assumption: no access control attributes to check
 
 		// Use Ksr to decrypt AuthNr
-		xcrypt_ctr(s_r_req, s_r_req + 26, 26);
+		xcrypt_ctr(messaging_buffer, messaging_buffer + 26, 26);
 
 		// Check NonceSR from AuthNr against stored value
 		uint8_t nonce_sr_from_storage[8];
@@ -593,30 +599,30 @@ process_s_r_req(const uint8_t *data,
 		   printf("Error: could not read NonceSR from memory.\n");
 		}
 
-		if (memcmp(nonce_sr_from_storage, s_r_req + 28, 8) != 0) {
+		if (memcmp(nonce_sr_from_storage, messaging_buffer + 28, 8) != 0) {
 			printf("Error: wrong NonceSR in AuthNr.\n");
 			return 0;
 		}
 
 		// Check NonceSR in the ticket against this same value
-		if (memcmp(nonce_sr_from_storage, s_r_req + 18, 8) != 0){
+		if (memcmp(nonce_sr_from_storage, messaging_buffer + 18, 8) != 0){
 			printf("Error: wrong NonceSR in ticketR.\n");
 			return 0;
 		}
 
 		// Check subject id again
-		if (memcmp(&subject_id, s_r_req + 27, 1) != 0) {
+		if (memcmp(&subject_id, messaging_buffer + 27, 1) != 0) {
 			printf("Error: wrong subject id in AuthNr.\n");
 			return 0;
 		}
 
 		// Accept and store subkey/session key (in memory allocated for this subject)
-		set_session_key(subject_id, s_r_req + 36);
+		set_session_key(subject_id, messaging_buffer + 36);
 
 		// Store Nonce4
 		int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
 		if (fd_write != -1) {
-			int n = cfs_write(fd_write, s_r_req + 52, 8);
+			int n = cfs_write(fd_write, messaging_buffer + 52, 8);
 			cfs_close(fd_write);
 			printf("Successfully written Nonce4 (%i bytes) to %s\n", n, filename);
 			printf("\n");
@@ -640,10 +646,10 @@ receiver_subject(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
-	printf("\nData received from: ");
-	PRINT6ADDR(sender_addr);
-	printf("\nAt port %d from port %d with length %d\n",
-		  receiver_port, sender_port, datalen);
+//	printf("\nData received from: ");
+//	PRINT6ADDR(sender_addr);
+//	printf("\nAt port %d from port %d with length %d\n",
+//		  receiver_port, sender_port, datalen);
 
 	// Rough demo separator between access request and key establishment request
 	if (datalen > 20) {
@@ -727,15 +733,15 @@ process_cm_ind(uint8_t subject_id,
 		uint16_t datalen) {
 	const char * filename = "properties";
 	// Enough room for a 40 byte policy
-	static uint8_t cm_ind[73];
+//	static uint8_t messaging_buffer[73];
 	printf("datalen %d, so policy is of length %d\n", datalen, datalen - 33);
-	memcpy(cm_ind, data, datalen);
+	memcpy(messaging_buffer, data, datalen);
 	printf("Full HID_CM_IND message: \n");
-	full_print_hex(cm_ind, sizeof(cm_ind));
+	full_print_hex(messaging_buffer, sizeof(messaging_buffer));
 
 	uint8_t need_to_request_next_key = 0;
 
-	if(same_mac(cm_ind + datalen - 4, cm_ind + 2, datalen - 6)) {
+	if(same_mac(messaging_buffer + datalen - 4, messaging_buffer + 2, datalen - 6)) {
 		if (nb_of_associated_subjects >= 10) {
 			printf("Oops, the number of associated subjects is currently set to 10.\n");
 		}
@@ -754,10 +760,10 @@ process_cm_ind(uint8_t subject_id,
 		printf("new subject policy_size: %d\n", current_subject->policy_size);
 
 		// decrypt policy before storage
-		xcrypt_ctr(resource_key, cm_ind + 29, current_subject->policy_size);
+		xcrypt_ctr(resource_key, messaging_buffer + 29, current_subject->policy_size);
 
 		// allocate memory and copy decrypted policy
-		struct policy *p =  store_policy(current_subject, cm_ind + 29);
+		struct policy *p =  store_policy(current_subject, messaging_buffer + 29);
 		if(p == NULL) {
 			printf("Error in store_policy()\n");
 		}
@@ -769,7 +775,7 @@ process_cm_ind(uint8_t subject_id,
 		//Ignore lifetime value
 
 		//Store nonce_sr for this subject
-		struct nonce_sr *n =  store_nonce_sr(current_subject, cm_ind + 4);
+		struct nonce_sr *n =  store_nonce_sr(current_subject, messaging_buffer + 4);
 		if(n == NULL) {
 			printf("Error in store_policy()\n");
 		}
@@ -782,11 +788,11 @@ process_cm_ind(uint8_t subject_id,
 			current_subject->fresh_information = 0;
 
 			printf("Kircm: \n");
-			full_print_hex(cm_ind + 13, 16);
+			full_print_hex(messaging_buffer + 13, 16);
 			//Write this value to file system
 			int fd_write = cfs_open(filename, CFS_WRITE);
 			if(fd_write != -1) {
-				int n = cfs_write(fd_write, cm_ind + 13, 16);
+				int n = cfs_write(fd_write, messaging_buffer + 13, 16);
 				cfs_close(fd_write);
 				printf("Successfully written Kircm (%i bytes) to %s\n", n, filename);
 				printf("\n");
@@ -884,7 +890,7 @@ process_cm_ind_rep(const uint8_t *data,
 	}
 }
 
-static void
+static uint8_t
 set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
@@ -905,7 +911,7 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 		cfs_remove(filename);
 		printf("\n");
 		printf("End of Hidra exchange with ACS\n");
-		return;
+		return 1;
 	}
 
 	printf("Subject id 3 == %d \n", data[3]);
@@ -926,6 +932,7 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 	else {
 		printf("Did not receive from ACS what was expected in the protocol.\n");
 	}
+	return 1;
 }
 
 static void
@@ -968,11 +975,11 @@ receiver_acs(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
-  printf("\nData received from: ");
-  PRINT6ADDR(sender_addr);
-  printf("\nAt port %d from port %d with length %d\n",
-		  receiver_port, sender_port, datalen);
-  printf("\n");
+//  printf("\nData received from: ");
+//  PRINT6ADDR(sender_addr);
+//  printf("\nAt port %d from port %d with length %d\n",
+//		  receiver_port, sender_port, datalen);
+//  printf("\n");
   //The first byte indicates the purpose of this message from the trusted server
   if (data[0]) {
 	  if (is_already_associated(data[2])) {
@@ -996,56 +1003,56 @@ set_global_address(void)
   uip_ds6_set_addr_iid(&ipaddr, &uip_lladdr);
   uip_ds6_addr_add(&ipaddr, 0, ADDR_AUTOCONF);
 
-  printf("IPv6 addresses: ");
-  for(i = 0; i < UIP_DS6_ADDR_NB; i++) {
-    state = uip_ds6_if.addr_list[i].state;
-    if(uip_ds6_if.addr_list[i].isused &&
-       (state == ADDR_TENTATIVE || state == ADDR_PREFERRED)) {
-      uip_debug_ipaddr_print(&uip_ds6_if.addr_list[i].ipaddr);
-      printf("\n");
-    }
-  }
+//  printf("IPv6 addresses: ");
+//  for(i = 0; i < UIP_DS6_ADDR_NB; i++) {
+//    state = uip_ds6_if.addr_list[i].state;
+//    if(uip_ds6_if.addr_list[i].isused &&
+//       (state == ADDR_TENTATIVE || state == ADDR_PREFERRED)) {
+//      uip_debug_ipaddr_print(&uip_ds6_if.addr_list[i].ipaddr);
+//      printf("\n");
+//    }
+//  }
 
   return &ipaddr;
 }
 
-void
-test_hmac() {
-
-	static const uint8_t text[43] =
-	{
-			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
-			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
-			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd
-	};
-
-	printf("Vector: \n");
-	full_print_hex(text, sizeof(text));
-
-	printf("Key: \n");
-	full_print_hex(resource_key, sizeof(resource_key));
-
-	static uint8_t digest[256];
-	static uint8_t result;
-	result = hmac (SHA256, text, sizeof(text), resource_key, sizeof(resource_key), digest);
-	if (result != 0) {
-		printf("Error: processing hmac. \n");
-	}
-
-	printf("HMAC_SHA256: \n");
-	full_print_hex(digest, 32);
-
-	static uint32_t hashed;
-	hashed = murmur3_32(digest, 32, 17);
-	uint8_t hashed_array[4];
-	hashed_array[0] = (hashed >> 24) & 0xff;
-	hashed_array[1] = (hashed >> 16) & 0xff;
-	hashed_array[2] = (hashed >> 8)  & 0xff;
-	hashed_array[3] = hashed & 0xff;
-
-	printf("Hashed HMAC_SHA256: \n");
-	full_print_hex(hashed_array, 4);
-}
+//void
+//test_hmac() {
+//
+//	static const uint8_t text[43] =
+//	{
+//			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
+//			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
+//			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd
+//	};
+//
+//	printf("Vector: \n");
+//	full_print_hex(text, sizeof(text));
+//
+//	printf("Key: \n");
+//	full_print_hex(resource_key, sizeof(resource_key));
+//
+//	static uint8_t digest[256];
+//	static uint8_t result;
+//	result = hmac (SHA256, text, sizeof(text), resource_key, sizeof(resource_key), digest);
+//	if (result != 0) {
+//		printf("Error: processing hmac. \n");
+//	}
+//
+//	printf("HMAC_SHA256: \n");
+//	full_print_hex(digest, 32);
+//
+//	static uint32_t hashed;
+//	hashed = murmur3_32(digest, 32, 17);
+//	uint8_t hashed_array[4];
+//	hashed_array[0] = (hashed >> 24) & 0xff;
+//	hashed_array[1] = (hashed >> 16) & 0xff;
+//	hashed_array[2] = (hashed >> 8)  & 0xff;
+//	hashed_array[3] = hashed & 0xff;
+//
+//	printf("Hashed HMAC_SHA256: \n");
+//	full_print_hex(hashed_array, 4);
+//}
 
 //void
 //test_hmac_sha2() {
@@ -1091,6 +1098,47 @@ test_hmac() {
 //	full_print_hex(hashed_array, 4);
 //}
 
+///////////////////
+
+void test_1(void)
+{
+        unsigned int result = 1;
+
+//        TC_PRINT("HMAC %s:\n", __func__);
+
+//        static const uint8_t data[43] =
+//        	{
+//        			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
+//        			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
+//        			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd
+//        	};
+
+//        static const uint8_t data[39] =
+//                	{
+//                			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
+//                			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
+//                			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c
+//                	};
+
+        static const uint8_t data[10] = {0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x68, 0x65, 0x6c, 0x6c, 0x6f};
+
+        const uint8_t key[16] =
+        		{0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x31, 0x30, 0x31, 0x31, 0x31, 0x32, 0x31};
+//        		resource_key;
+
+        struct tc_hmac_state_struct h;
+
+        (void)memset(&h, 0x00, sizeof(h));
+        (void)tc_hmac_set_key(&h, key, sizeof(key));
+
+        uint8_t digest[32];
+
+		(void)tc_hmac_init(&h);
+		(void)tc_hmac_update(&h, data, sizeof(data));
+		(void)tc_hmac_final(digest, TC_SHA256_DIGEST_SIZE, &h);
+
+		full_print_hex(digest, TC_SHA256_DIGEST_SIZE);
+}
 
 PROCESS_THREAD(hidra_r, ev, data)
 {
@@ -1116,6 +1164,8 @@ PROCESS_THREAD(hidra_r, ev, data)
 //	test_hmac();
 
 //	test_hmac_sha2();
+
+//	test_1();
 
 	while(1) {
 		PROCESS_WAIT_EVENT();
@@ -1729,1205 +1779,432 @@ uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 	return h;
 }
 
-
-///////////////////////////
-///////HMAC_SHA2///////////
+////?TINY HMAC + TINY SHA256?////
+/* utils.c - TinyCrypt platform-dependent run-time operations */
 
 /*
- * HMAC-SHA-224/256/384/512 implementation
- * Last update: 06/15/2005
- * Issue date:  06/15/2005
+ *  Copyright (C) 2017 by Intel Corporation, All Rights Reserved.
  *
- * Copyright (C) 2005 Olivier Gay <olivier.gay@a3.epfl.ch>
- * All rights reserved.
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
+ *    - Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *
+ *    - Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the project nor the names of its contributors
+ *
+ *    - Neither the name of Intel Corporation nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ *  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ *  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ *  POSSIBILITY OF SUCH DAMAGE.
  */
 
-/* HMAC-SHA-224 functions */
+#define MASK_TWENTY_SEVEN 0x1b
 
-void hmac_sha224_init(hmac_sha224_ctx *ctx, const unsigned char *key,
-                      unsigned int key_size)
+unsigned int _copy(uint8_t *to, unsigned int to_len,
+		   const uint8_t *from, unsigned int from_len)
 {
-    unsigned int fill;
-    unsigned int num;
-
-    const unsigned char *key_used;
-    unsigned char key_temp[SHA224_DIGEST_SIZE];
-    int i;
-
-    if (key_size == SHA224_BLOCK_SIZE) {
-        key_used = key;
-        num = SHA224_BLOCK_SIZE;
-    } else {
-        if (key_size > SHA224_BLOCK_SIZE){
-            num = SHA224_DIGEST_SIZE;
-            sha224(key, key_size, key_temp);
-            key_used = key_temp;
-        } else { /* key_size > SHA224_BLOCK_SIZE */
-            key_used = key;
-            num = key_size;
-        }
-        fill = SHA224_BLOCK_SIZE - num;
-
-        memset(ctx->block_ipad + num, 0x36, fill);
-        memset(ctx->block_opad + num, 0x5c, fill);
-    }
-
-    for (i = 0; i < (int) num; i++) {
-        ctx->block_ipad[i] = key_used[i] ^ 0x36;
-        ctx->block_opad[i] = key_used[i] ^ 0x5c;
-    }
-
-    sha224_init(&ctx->ctx_inside);
-    sha224_update(&ctx->ctx_inside, ctx->block_ipad, SHA224_BLOCK_SIZE);
-
-    sha224_init(&ctx->ctx_outside);
-    sha224_update(&ctx->ctx_outside, ctx->block_opad,
-                  SHA224_BLOCK_SIZE);
-
-    /* for hmac_reinit */
-    memcpy(&ctx->ctx_inside_reinit, &ctx->ctx_inside,
-           sizeof(sha224_ctx));
-    memcpy(&ctx->ctx_outside_reinit, &ctx->ctx_outside,
-           sizeof(sha224_ctx));
+	if (from_len <= to_len) {
+		(void)memcpy(to, from, from_len);
+		return from_len;
+	} else {
+		return TC_CRYPTO_FAIL;
+	}
 }
 
-void hmac_sha224_reinit(hmac_sha224_ctx *ctx)
+void _set(void *to, uint8_t val, unsigned int len)
 {
-    memcpy(&ctx->ctx_inside, &ctx->ctx_inside_reinit,
-           sizeof(sha224_ctx));
-    memcpy(&ctx->ctx_outside, &ctx->ctx_outside_reinit,
-           sizeof(sha224_ctx));
+	(void)memset(to, val, len);
 }
 
-void hmac_sha224_update(hmac_sha224_ctx *ctx, const unsigned char *message,
-                        unsigned int message_len)
-{
-    sha224_update(&ctx->ctx_inside, message, message_len);
-}
-
-void hmac_sha224_final(hmac_sha224_ctx *ctx, unsigned char *mac,
-                       unsigned int mac_size)
-{
-    unsigned char digest_inside[SHA224_DIGEST_SIZE];
-    unsigned char mac_temp[SHA224_DIGEST_SIZE];
-
-    sha224_final(&ctx->ctx_inside, digest_inside);
-    sha224_update(&ctx->ctx_outside, digest_inside, SHA224_DIGEST_SIZE);
-    sha224_final(&ctx->ctx_outside, mac_temp);
-    memcpy(mac, mac_temp, mac_size);
-}
-
-void hmac_sha224(const unsigned char *key, unsigned int key_size,
-          const unsigned char *message, unsigned int message_len,
-          unsigned char *mac, unsigned mac_size)
-{
-    hmac_sha224_ctx ctx;
-
-    hmac_sha224_init(&ctx, key, key_size);
-    hmac_sha224_update(&ctx, message, message_len);
-    hmac_sha224_final(&ctx, mac, mac_size);
-}
-
-/* HMAC-SHA-256 functions */
-
-void hmac_sha256_init(hmac_sha256_ctx *ctx, const unsigned char *key,
-                      unsigned int key_size)
-{
-    unsigned int fill;
-    unsigned int num;
-
-    const unsigned char *key_used;
-    unsigned char key_temp[SHA256_DIGEST_SIZE];
-    int i;
-
-    if (key_size == SHA256_BLOCK_SIZE) {
-        key_used = key;
-        num = SHA256_BLOCK_SIZE;
-    } else {
-        if (key_size > SHA256_BLOCK_SIZE){
-            num = SHA256_DIGEST_SIZE;
-            sha256(key, key_size, key_temp);
-            key_used = key_temp;
-        } else { /* key_size > SHA256_BLOCK_SIZE */
-            key_used = key;
-            num = key_size;
-        }
-        fill = SHA256_BLOCK_SIZE - num;
-
-        memset(ctx->block_ipad + num, 0x36, fill);
-        memset(ctx->block_opad + num, 0x5c, fill);
-    }
-
-    for (i = 0; i < (int) num; i++) {
-        ctx->block_ipad[i] = key_used[i] ^ 0x36;
-        ctx->block_opad[i] = key_used[i] ^ 0x5c;
-    }
-
-    sha256_init(&ctx->ctx_inside);
-    sha256_update(&ctx->ctx_inside, ctx->block_ipad, SHA256_BLOCK_SIZE);
-
-    sha256_init(&ctx->ctx_outside);
-    sha256_update(&ctx->ctx_outside, ctx->block_opad,
-                  SHA256_BLOCK_SIZE);
-
-    /* for hmac_reinit */
-    memcpy(&ctx->ctx_inside_reinit, &ctx->ctx_inside,
-           sizeof(sha256_ctx));
-    memcpy(&ctx->ctx_outside_reinit, &ctx->ctx_outside,
-           sizeof(sha256_ctx));
-}
-
-void hmac_sha256_reinit(hmac_sha256_ctx *ctx)
-{
-    memcpy(&ctx->ctx_inside, &ctx->ctx_inside_reinit,
-           sizeof(sha256_ctx));
-    memcpy(&ctx->ctx_outside, &ctx->ctx_outside_reinit,
-           sizeof(sha256_ctx));
-}
-
-void hmac_sha256_update(hmac_sha256_ctx *ctx, const unsigned char *message,
-                        unsigned int message_len)
-{
-    sha256_update(&ctx->ctx_inside, message, message_len);
-}
-
-void hmac_sha256_final(hmac_sha256_ctx *ctx, unsigned char *mac,
-                       unsigned int mac_size)
-{
-    unsigned char digest_inside[SHA256_DIGEST_SIZE];
-    unsigned char mac_temp[SHA256_DIGEST_SIZE];
-
-    sha256_final(&ctx->ctx_inside, digest_inside);
-    sha256_update(&ctx->ctx_outside, digest_inside, SHA256_DIGEST_SIZE);
-    sha256_final(&ctx->ctx_outside, mac_temp);
-    memcpy(mac, mac_temp, mac_size);
-}
-
-void hmac_sha256(const unsigned char *key, unsigned int key_size,
-          const unsigned char *message, unsigned int message_len,
-          unsigned char *mac, unsigned mac_size)
-{
-    hmac_sha256_ctx ctx;
-
-    hmac_sha256_init(&ctx, key, key_size);
-    hmac_sha256_update(&ctx, message, message_len);
-    hmac_sha256_final(&ctx, mac, mac_size);
-}
-
-/* HMAC-SHA-384 functions */
-
-void hmac_sha384_init(hmac_sha384_ctx *ctx, const unsigned char *key,
-                      unsigned int key_size)
-{
-    unsigned int fill;
-    unsigned int num;
-
-    const unsigned char *key_used;
-    unsigned char key_temp[SHA384_DIGEST_SIZE];
-    int i;
-
-    if (key_size == SHA384_BLOCK_SIZE) {
-        key_used = key;
-        num = SHA384_BLOCK_SIZE;
-    } else {
-        if (key_size > SHA384_BLOCK_SIZE){
-            num = SHA384_DIGEST_SIZE;
-            sha384(key, key_size, key_temp);
-            key_used = key_temp;
-        } else { /* key_size > SHA384_BLOCK_SIZE */
-            key_used = key;
-            num = key_size;
-        }
-        fill = SHA384_BLOCK_SIZE - num;
-
-        memset(ctx->block_ipad + num, 0x36, fill);
-        memset(ctx->block_opad + num, 0x5c, fill);
-    }
-
-    for (i = 0; i < (int) num; i++) {
-        ctx->block_ipad[i] = key_used[i] ^ 0x36;
-        ctx->block_opad[i] = key_used[i] ^ 0x5c;
-    }
-
-    sha384_init(&ctx->ctx_inside);
-    sha384_update(&ctx->ctx_inside, ctx->block_ipad, SHA384_BLOCK_SIZE);
-
-    sha384_init(&ctx->ctx_outside);
-    sha384_update(&ctx->ctx_outside, ctx->block_opad,
-                  SHA384_BLOCK_SIZE);
-
-    /* for hmac_reinit */
-    memcpy(&ctx->ctx_inside_reinit, &ctx->ctx_inside,
-           sizeof(sha384_ctx));
-    memcpy(&ctx->ctx_outside_reinit, &ctx->ctx_outside,
-           sizeof(sha384_ctx));
-}
-
-void hmac_sha384_reinit(hmac_sha384_ctx *ctx)
-{
-    memcpy(&ctx->ctx_inside, &ctx->ctx_inside_reinit,
-           sizeof(sha384_ctx));
-    memcpy(&ctx->ctx_outside, &ctx->ctx_outside_reinit,
-           sizeof(sha384_ctx));
-}
-
-void hmac_sha384_update(hmac_sha384_ctx *ctx, const unsigned char *message,
-                        unsigned int message_len)
-{
-    sha384_update(&ctx->ctx_inside, message, message_len);
-}
-
-void hmac_sha384_final(hmac_sha384_ctx *ctx, unsigned char *mac,
-                       unsigned int mac_size)
-{
-    unsigned char digest_inside[SHA384_DIGEST_SIZE];
-    unsigned char mac_temp[SHA384_DIGEST_SIZE];
-
-    sha384_final(&ctx->ctx_inside, digest_inside);
-    sha384_update(&ctx->ctx_outside, digest_inside, SHA384_DIGEST_SIZE);
-    sha384_final(&ctx->ctx_outside, mac_temp);
-    memcpy(mac, mac_temp, mac_size);
-}
-
-void hmac_sha384(const unsigned char *key, unsigned int key_size,
-          const unsigned char *message, unsigned int message_len,
-          unsigned char *mac, unsigned mac_size)
-{
-    hmac_sha384_ctx ctx;
-
-    hmac_sha384_init(&ctx, key, key_size);
-    hmac_sha384_update(&ctx, message, message_len);
-    hmac_sha384_final(&ctx, mac, mac_size);
-}
-
-/* HMAC-SHA-512 functions */
-
-void hmac_sha512_init(hmac_sha512_ctx *ctx, const unsigned char *key,
-                      unsigned int key_size)
-{
-    unsigned int fill;
-    unsigned int num;
-
-    const unsigned char *key_used;
-    unsigned char key_temp[SHA512_DIGEST_SIZE];
-    int i;
-
-    if (key_size == SHA512_BLOCK_SIZE) {
-        key_used = key;
-        num = SHA512_BLOCK_SIZE;
-    } else {
-        if (key_size > SHA512_BLOCK_SIZE){
-            num = SHA512_DIGEST_SIZE;
-            sha512(key, key_size, key_temp);
-            key_used = key_temp;
-        } else { /* key_size > SHA512_BLOCK_SIZE */
-            key_used = key;
-            num = key_size;
-        }
-        fill = SHA512_BLOCK_SIZE - num;
-
-        memset(ctx->block_ipad + num, 0x36, fill);
-        memset(ctx->block_opad + num, 0x5c, fill);
-    }
-
-    for (i = 0; i < (int) num; i++) {
-        ctx->block_ipad[i] = key_used[i] ^ 0x36;
-        ctx->block_opad[i] = key_used[i] ^ 0x5c;
-    }
-
-    sha512_init(&ctx->ctx_inside);
-    sha512_update(&ctx->ctx_inside, ctx->block_ipad, SHA512_BLOCK_SIZE);
-
-    sha512_init(&ctx->ctx_outside);
-    sha512_update(&ctx->ctx_outside, ctx->block_opad,
-                  SHA512_BLOCK_SIZE);
-
-    /* for hmac_reinit */
-    memcpy(&ctx->ctx_inside_reinit, &ctx->ctx_inside,
-           sizeof(sha512_ctx));
-    memcpy(&ctx->ctx_outside_reinit, &ctx->ctx_outside,
-           sizeof(sha512_ctx));
-}
-
-void hmac_sha512_reinit(hmac_sha512_ctx *ctx)
-{
-    memcpy(&ctx->ctx_inside, &ctx->ctx_inside_reinit,
-           sizeof(sha512_ctx));
-    memcpy(&ctx->ctx_outside, &ctx->ctx_outside_reinit,
-           sizeof(sha512_ctx));
-}
-
-void hmac_sha512_update(hmac_sha512_ctx *ctx, const unsigned char *message,
-                        unsigned int message_len)
-{
-    sha512_update(&ctx->ctx_inside, message, message_len);
-}
-
-void hmac_sha512_final(hmac_sha512_ctx *ctx, unsigned char *mac,
-                       unsigned int mac_size)
-{
-    unsigned char digest_inside[SHA512_DIGEST_SIZE];
-    unsigned char mac_temp[SHA512_DIGEST_SIZE];
-
-    sha512_final(&ctx->ctx_inside, digest_inside);
-    sha512_update(&ctx->ctx_outside, digest_inside, SHA512_DIGEST_SIZE);
-    sha512_final(&ctx->ctx_outside, mac_temp);
-    memcpy(mac, mac_temp, mac_size);
-}
-
-void hmac_sha512(const unsigned char *key, unsigned int key_size,
-          const unsigned char *message, unsigned int message_len,
-          unsigned char *mac, unsigned mac_size)
-{
-    hmac_sha512_ctx ctx;
-
-    hmac_sha512_init(&ctx, key, key_size);
-    hmac_sha512_update(&ctx, message, message_len);
-    hmac_sha512_final(&ctx, mac, mac_size);
-}
-
-
-////////////////////////
-////////SHA2////////////
 /*
- * FIPS 180-2 SHA-224/256/384/512 implementation
- * Last update: 02/02/2007
- * Issue date:  04/30/2005
+ * Doubles the value of a byte for values up to 127.
+ */
+uint8_t _double_byte(uint8_t a)
+{
+	return ((a<<1) ^ ((a>>7) * MASK_TWENTY_SEVEN));
+}
+
+//int _compare(const uint8_t *a, const uint8_t *b, size_t size)
+//{
+//	const uint8_t *tempa = a;
+//	const uint8_t *tempb = b;
+//	uint8_t result = 0;
+//
+//	for (unsigned int i = 0; i < size; i++) {
+//		result |= tempa[i] ^ tempb[i];
+//	}
+//	return result;
+//}
+
+/* hmac.c - TinyCrypt implementation of the HMAC algorithm */
+
+/*
+ *  Copyright (C) 2017 by Intel Corporation, All Rights Reserved.
  *
- * Copyright (C) 2005, 2007 Olivier Gay <olivier.gay@a3.epfl.ch>
- * All rights reserved.
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
+ *    - Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *
+ *    - Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the project nor the names of its contributors
+ *
+ *    - Neither the name of Intel Corporation nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ *  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ *  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ *  POSSIBILITY OF SUCH DAMAGE.
  */
 
-#if 0
-#define UNROLL_LOOPS /* Enable loops unrolling */
-#endif
-
-#define SHFR(x, n)    (x >> n)
-#define ROTR(x, n)   ((x >> n) | (x << ((sizeof(x) << 3) - n)))
-#define ROTL(x, n)   ((x << n) | (x >> ((sizeof(x) << 3) - n)))
-#define CH(x, y, z)  ((x & y) ^ (~x & z))
-#define MAJ(x, y, z) ((x & y) ^ (x & z) ^ (y & z))
-
-#define SHA256_F1(x) (ROTR(x,  2) ^ ROTR(x, 13) ^ ROTR(x, 22))
-#define SHA256_F2(x) (ROTR(x,  6) ^ ROTR(x, 11) ^ ROTR(x, 25))
-#define SHA256_F3(x) (ROTR(x,  7) ^ ROTR(x, 18) ^ SHFR(x,  3))
-#define SHA256_F4(x) (ROTR(x, 17) ^ ROTR(x, 19) ^ SHFR(x, 10))
-
-#define SHA512_F1(x) (ROTR(x, 28) ^ ROTR(x, 34) ^ ROTR(x, 39))
-#define SHA512_F2(x) (ROTR(x, 14) ^ ROTR(x, 18) ^ ROTR(x, 41))
-#define SHA512_F3(x) (ROTR(x,  1) ^ ROTR(x,  8) ^ SHFR(x,  7))
-#define SHA512_F4(x) (ROTR(x, 19) ^ ROTR(x, 61) ^ SHFR(x,  6))
-
-#define UNPACK32(x, str)                      \
-{                                             \
-    *((str) + 3) = (uint8) ((x)      );       \
-    *((str) + 2) = (uint8) ((x) >>  8);       \
-    *((str) + 1) = (uint8) ((x) >> 16);       \
-    *((str) + 0) = (uint8) ((x) >> 24);       \
-}
-
-#define PACK32(str, x)                        \
-{                                             \
-    *(x) =   ((uint32) *((str) + 3)      )    \
-           | ((uint32) *((str) + 2) <<  8)    \
-           | ((uint32) *((str) + 1) << 16)    \
-           | ((uint32) *((str) + 0) << 24);   \
-}
-
-#define UNPACK64(x, str)                      \
-{                                             \
-    *((str) + 7) = (uint8) ((x)      );       \
-    *((str) + 6) = (uint8) ((x) >>  8);       \
-    *((str) + 5) = (uint8) ((x) >> 16);       \
-    *((str) + 4) = (uint8) ((x) >> 24);       \
-    *((str) + 3) = (uint8) ((x) >> 32);       \
-    *((str) + 2) = (uint8) ((x) >> 40);       \
-    *((str) + 1) = (uint8) ((x) >> 48);       \
-    *((str) + 0) = (uint8) ((x) >> 56);       \
-}
-
-#define PACK64(str, x)                        \
-{                                             \
-    *(x) =   ((uint64) *((str) + 7)      )    \
-           | ((uint64) *((str) + 6) <<  8)    \
-           | ((uint64) *((str) + 5) << 16)    \
-           | ((uint64) *((str) + 4) << 24)    \
-           | ((uint64) *((str) + 3) << 32)    \
-           | ((uint64) *((str) + 2) << 40)    \
-           | ((uint64) *((str) + 1) << 48)    \
-           | ((uint64) *((str) + 0) << 56);   \
-}
-
-/* Macros used for loops unrolling */
-
-#define SHA256_SCR(i)                         \
-{                                             \
-    w[i] =  SHA256_F4(w[i -  2]) + w[i -  7]  \
-          + SHA256_F3(w[i - 15]) + w[i - 16]; \
-}
-
-#define SHA512_SCR(i)                         \
-{                                             \
-    w[i] =  SHA512_F4(w[i -  2]) + w[i -  7]  \
-          + SHA512_F3(w[i - 15]) + w[i - 16]; \
-}
-
-#define SHA256_EXP(a, b, c, d, e, f, g, h, j)               \
-{                                                           \
-    t1 = wv[h] + SHA256_F2(wv[e]) + CH(wv[e], wv[f], wv[g]) \
-         + sha256_k[j] + w[j];                              \
-    t2 = SHA256_F1(wv[a]) + MAJ(wv[a], wv[b], wv[c]);       \
-    wv[d] += t1;                                            \
-    wv[h] = t1 + t2;                                        \
-}
-
-#define SHA512_EXP(a, b, c, d, e, f, g ,h, j)               \
-{                                                           \
-    t1 = wv[h] + SHA512_F2(wv[e]) + CH(wv[e], wv[f], wv[g]) \
-         + sha512_k[j] + w[j];                              \
-    t2 = SHA512_F1(wv[a]) + MAJ(wv[a], wv[b], wv[c]);       \
-    wv[d] += t1;                                            \
-    wv[h] = t1 + t2;                                        \
-}
-
-uint32 sha224_h0[8] =
-            {0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939,
-             0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4};
-
-uint32 sha256_h0[8] =
-            {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
-
-uint64 sha384_h0[8] =
-            {0xcbbb9d5dc1059ed8ULL, 0x629a292a367cd507ULL,
-             0x9159015a3070dd17ULL, 0x152fecd8f70e5939ULL,
-             0x67332667ffc00b31ULL, 0x8eb44a8768581511ULL,
-             0xdb0c2e0d64f98fa7ULL, 0x47b5481dbefa4fa4ULL};
-
-uint64 sha512_h0[8] =
-            {0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
-             0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
-             0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL,
-             0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL};
-
-uint32 sha256_k[64] =
-            {0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-             0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-             0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-             0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-             0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-             0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-             0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-             0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-             0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-             0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-             0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-             0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-             0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-             0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-             0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-             0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
-
-uint64 sha512_k[80] =
-            {0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL,
-             0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
-             0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL,
-             0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
-             0xd807aa98a3030242ULL, 0x12835b0145706fbeULL,
-             0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
-             0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL,
-             0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL,
-             0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL,
-             0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL,
-             0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL,
-             0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
-             0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL,
-             0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,
-             0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL,
-             0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
-             0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL,
-             0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
-             0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL,
-             0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,
-             0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL,
-             0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
-             0xd192e819d6ef5218ULL, 0xd69906245565a910ULL,
-             0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
-             0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL,
-             0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL,
-             0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL,
-             0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL,
-             0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL,
-             0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
-             0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL,
-             0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL,
-             0xca273eceea26619cULL, 0xd186b8c721c0c207ULL,
-             0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
-             0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL,
-             0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
-             0x28db77f523047d84ULL, 0x32caab7b40c72493ULL,
-             0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
-             0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL,
-             0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL};
-
-/* SHA-256 functions */
-
-void sha256_transf(sha256_ctx *ctx, const unsigned char *message,
-                   unsigned int block_nb)
+static void rekey(uint8_t *key, const uint8_t *new_key, unsigned int key_size)
 {
-    uint32 w[64];
-    uint32 wv[8];
-    uint32 t1, t2;
-    const unsigned char *sub_block;
-    int i;
+	const uint8_t inner_pad = (uint8_t) 0x36;
+	const uint8_t outer_pad = (uint8_t) 0x5c;
+	unsigned int i;
 
-#ifndef UNROLL_LOOPS
-    int j;
-#endif
-
-    for (i = 0; i < (int) block_nb; i++) {
-        sub_block = message + (i << 6);
-
-#ifndef UNROLL_LOOPS
-        for (j = 0; j < 16; j++) {
-            PACK32(&sub_block[j << 2], &w[j]);
-        }
-
-        for (j = 16; j < 64; j++) {
-            SHA256_SCR(j);
-        }
-
-        for (j = 0; j < 8; j++) {
-            wv[j] = ctx->h[j];
-        }
-
-        for (j = 0; j < 64; j++) {
-            t1 = wv[7] + SHA256_F2(wv[4]) + CH(wv[4], wv[5], wv[6])
-                + sha256_k[j] + w[j];
-            t2 = SHA256_F1(wv[0]) + MAJ(wv[0], wv[1], wv[2]);
-            wv[7] = wv[6];
-            wv[6] = wv[5];
-            wv[5] = wv[4];
-            wv[4] = wv[3] + t1;
-            wv[3] = wv[2];
-            wv[2] = wv[1];
-            wv[1] = wv[0];
-            wv[0] = t1 + t2;
-        }
-
-        for (j = 0; j < 8; j++) {
-            ctx->h[j] += wv[j];
-        }
-#else
-        PACK32(&sub_block[ 0], &w[ 0]); PACK32(&sub_block[ 4], &w[ 1]);
-        PACK32(&sub_block[ 8], &w[ 2]); PACK32(&sub_block[12], &w[ 3]);
-        PACK32(&sub_block[16], &w[ 4]); PACK32(&sub_block[20], &w[ 5]);
-        PACK32(&sub_block[24], &w[ 6]); PACK32(&sub_block[28], &w[ 7]);
-        PACK32(&sub_block[32], &w[ 8]); PACK32(&sub_block[36], &w[ 9]);
-        PACK32(&sub_block[40], &w[10]); PACK32(&sub_block[44], &w[11]);
-        PACK32(&sub_block[48], &w[12]); PACK32(&sub_block[52], &w[13]);
-        PACK32(&sub_block[56], &w[14]); PACK32(&sub_block[60], &w[15]);
-
-        SHA256_SCR(16); SHA256_SCR(17); SHA256_SCR(18); SHA256_SCR(19);
-        SHA256_SCR(20); SHA256_SCR(21); SHA256_SCR(22); SHA256_SCR(23);
-        SHA256_SCR(24); SHA256_SCR(25); SHA256_SCR(26); SHA256_SCR(27);
-        SHA256_SCR(28); SHA256_SCR(29); SHA256_SCR(30); SHA256_SCR(31);
-        SHA256_SCR(32); SHA256_SCR(33); SHA256_SCR(34); SHA256_SCR(35);
-        SHA256_SCR(36); SHA256_SCR(37); SHA256_SCR(38); SHA256_SCR(39);
-        SHA256_SCR(40); SHA256_SCR(41); SHA256_SCR(42); SHA256_SCR(43);
-        SHA256_SCR(44); SHA256_SCR(45); SHA256_SCR(46); SHA256_SCR(47);
-        SHA256_SCR(48); SHA256_SCR(49); SHA256_SCR(50); SHA256_SCR(51);
-        SHA256_SCR(52); SHA256_SCR(53); SHA256_SCR(54); SHA256_SCR(55);
-        SHA256_SCR(56); SHA256_SCR(57); SHA256_SCR(58); SHA256_SCR(59);
-        SHA256_SCR(60); SHA256_SCR(61); SHA256_SCR(62); SHA256_SCR(63);
-
-        wv[0] = ctx->h[0]; wv[1] = ctx->h[1];
-        wv[2] = ctx->h[2]; wv[3] = ctx->h[3];
-        wv[4] = ctx->h[4]; wv[5] = ctx->h[5];
-        wv[6] = ctx->h[6]; wv[7] = ctx->h[7];
-
-        SHA256_EXP(0,1,2,3,4,5,6,7, 0); SHA256_EXP(7,0,1,2,3,4,5,6, 1);
-        SHA256_EXP(6,7,0,1,2,3,4,5, 2); SHA256_EXP(5,6,7,0,1,2,3,4, 3);
-        SHA256_EXP(4,5,6,7,0,1,2,3, 4); SHA256_EXP(3,4,5,6,7,0,1,2, 5);
-        SHA256_EXP(2,3,4,5,6,7,0,1, 6); SHA256_EXP(1,2,3,4,5,6,7,0, 7);
-        SHA256_EXP(0,1,2,3,4,5,6,7, 8); SHA256_EXP(7,0,1,2,3,4,5,6, 9);
-        SHA256_EXP(6,7,0,1,2,3,4,5,10); SHA256_EXP(5,6,7,0,1,2,3,4,11);
-        SHA256_EXP(4,5,6,7,0,1,2,3,12); SHA256_EXP(3,4,5,6,7,0,1,2,13);
-        SHA256_EXP(2,3,4,5,6,7,0,1,14); SHA256_EXP(1,2,3,4,5,6,7,0,15);
-        SHA256_EXP(0,1,2,3,4,5,6,7,16); SHA256_EXP(7,0,1,2,3,4,5,6,17);
-        SHA256_EXP(6,7,0,1,2,3,4,5,18); SHA256_EXP(5,6,7,0,1,2,3,4,19);
-        SHA256_EXP(4,5,6,7,0,1,2,3,20); SHA256_EXP(3,4,5,6,7,0,1,2,21);
-        SHA256_EXP(2,3,4,5,6,7,0,1,22); SHA256_EXP(1,2,3,4,5,6,7,0,23);
-        SHA256_EXP(0,1,2,3,4,5,6,7,24); SHA256_EXP(7,0,1,2,3,4,5,6,25);
-        SHA256_EXP(6,7,0,1,2,3,4,5,26); SHA256_EXP(5,6,7,0,1,2,3,4,27);
-        SHA256_EXP(4,5,6,7,0,1,2,3,28); SHA256_EXP(3,4,5,6,7,0,1,2,29);
-        SHA256_EXP(2,3,4,5,6,7,0,1,30); SHA256_EXP(1,2,3,4,5,6,7,0,31);
-        SHA256_EXP(0,1,2,3,4,5,6,7,32); SHA256_EXP(7,0,1,2,3,4,5,6,33);
-        SHA256_EXP(6,7,0,1,2,3,4,5,34); SHA256_EXP(5,6,7,0,1,2,3,4,35);
-        SHA256_EXP(4,5,6,7,0,1,2,3,36); SHA256_EXP(3,4,5,6,7,0,1,2,37);
-        SHA256_EXP(2,3,4,5,6,7,0,1,38); SHA256_EXP(1,2,3,4,5,6,7,0,39);
-        SHA256_EXP(0,1,2,3,4,5,6,7,40); SHA256_EXP(7,0,1,2,3,4,5,6,41);
-        SHA256_EXP(6,7,0,1,2,3,4,5,42); SHA256_EXP(5,6,7,0,1,2,3,4,43);
-        SHA256_EXP(4,5,6,7,0,1,2,3,44); SHA256_EXP(3,4,5,6,7,0,1,2,45);
-        SHA256_EXP(2,3,4,5,6,7,0,1,46); SHA256_EXP(1,2,3,4,5,6,7,0,47);
-        SHA256_EXP(0,1,2,3,4,5,6,7,48); SHA256_EXP(7,0,1,2,3,4,5,6,49);
-        SHA256_EXP(6,7,0,1,2,3,4,5,50); SHA256_EXP(5,6,7,0,1,2,3,4,51);
-        SHA256_EXP(4,5,6,7,0,1,2,3,52); SHA256_EXP(3,4,5,6,7,0,1,2,53);
-        SHA256_EXP(2,3,4,5,6,7,0,1,54); SHA256_EXP(1,2,3,4,5,6,7,0,55);
-        SHA256_EXP(0,1,2,3,4,5,6,7,56); SHA256_EXP(7,0,1,2,3,4,5,6,57);
-        SHA256_EXP(6,7,0,1,2,3,4,5,58); SHA256_EXP(5,6,7,0,1,2,3,4,59);
-        SHA256_EXP(4,5,6,7,0,1,2,3,60); SHA256_EXP(3,4,5,6,7,0,1,2,61);
-        SHA256_EXP(2,3,4,5,6,7,0,1,62); SHA256_EXP(1,2,3,4,5,6,7,0,63);
-
-        ctx->h[0] += wv[0]; ctx->h[1] += wv[1];
-        ctx->h[2] += wv[2]; ctx->h[3] += wv[3];
-        ctx->h[4] += wv[4]; ctx->h[5] += wv[5];
-        ctx->h[6] += wv[6]; ctx->h[7] += wv[7];
-#endif /* !UNROLL_LOOPS */
-    }
+	for (i = 0; i < key_size; ++i) {
+		key[i] = inner_pad ^ new_key[i];
+		key[i + TC_SHA256_BLOCK_SIZE] = outer_pad ^ new_key[i];
+	}
+	for (; i < TC_SHA256_BLOCK_SIZE; ++i) {
+		key[i] = inner_pad; key[i + TC_SHA256_BLOCK_SIZE] = outer_pad;
+	}
 }
 
-void sha256(const unsigned char *message, unsigned int len, unsigned char *digest)
+int tc_hmac_set_key(TCHmacState_t ctx, const uint8_t *key,
+		    unsigned int key_size)
 {
-    sha256_ctx ctx;
+	/* Input sanity check */
+	if (ctx == (TCHmacState_t) 0 ||
+	    key == (const uint8_t *) 0 ||
+	    key_size == 0) {
+		return TC_CRYPTO_FAIL;
+	}
 
-    sha256_init(&ctx);
-    sha256_update(&ctx, message, len);
-    sha256_final(&ctx, digest);
+	const uint8_t dummy_key[TC_SHA256_BLOCK_SIZE];
+	struct tc_hmac_state_struct dummy_state;
+
+	if (key_size <= TC_SHA256_BLOCK_SIZE) {
+		/*
+		 * The next three calls are dummy calls just to avoid
+		 * certain timing attacks. Without these dummy calls,
+		 * adversaries would be able to learn whether the key_size is
+		 * greater than TC_SHA256_BLOCK_SIZE by measuring the time
+		 * consumed in this process.
+		 */
+		(void)tc_sha256_init(&dummy_state.hash_state);
+		(void)tc_sha256_update(&dummy_state.hash_state,
+				       dummy_key,
+				       key_size);
+		(void)tc_sha256_final(&dummy_state.key[TC_SHA256_DIGEST_SIZE],
+				      &dummy_state.hash_state);
+
+		/* Actual code for when key_size <= TC_SHA256_BLOCK_SIZE: */
+		rekey(ctx->key, key, key_size);
+	} else {
+		(void)tc_sha256_init(&ctx->hash_state);
+		(void)tc_sha256_update(&ctx->hash_state, key, key_size);
+		(void)tc_sha256_final(&ctx->key[TC_SHA256_DIGEST_SIZE],
+				      &ctx->hash_state);
+		rekey(ctx->key,
+		      &ctx->key[TC_SHA256_DIGEST_SIZE],
+		      TC_SHA256_DIGEST_SIZE);
+	}
+
+	return TC_CRYPTO_SUCCESS;
 }
 
-void sha256_init(sha256_ctx *ctx)
+int tc_hmac_init(TCHmacState_t ctx)
 {
-#ifndef UNROLL_LOOPS
-    int i;
-    for (i = 0; i < 8; i++) {
-        ctx->h[i] = sha256_h0[i];
-    }
-#else
-    ctx->h[0] = sha256_h0[0]; ctx->h[1] = sha256_h0[1];
-    ctx->h[2] = sha256_h0[2]; ctx->h[3] = sha256_h0[3];
-    ctx->h[4] = sha256_h0[4]; ctx->h[5] = sha256_h0[5];
-    ctx->h[6] = sha256_h0[6]; ctx->h[7] = sha256_h0[7];
-#endif /* !UNROLL_LOOPS */
 
-    ctx->len = 0;
-    ctx->tot_len = 0;
+	/* input sanity check: */
+	if (ctx == (TCHmacState_t) 0) {
+		return TC_CRYPTO_FAIL;
+	}
+
+  (void) tc_sha256_init(&ctx->hash_state);
+  (void) tc_sha256_update(&ctx->hash_state, ctx->key, TC_SHA256_BLOCK_SIZE);
+
+	return TC_CRYPTO_SUCCESS;
 }
 
-void sha256_update(sha256_ctx *ctx, const unsigned char *message,
-                   unsigned int len)
+int tc_hmac_update(TCHmacState_t ctx,
+		   const void *data,
+		   unsigned int data_length)
 {
-    unsigned int block_nb;
-    unsigned int new_len, rem_len, tmp_len;
-    const unsigned char *shifted_message;
 
-    tmp_len = SHA256_BLOCK_SIZE - ctx->len;
-    rem_len = len < tmp_len ? len : tmp_len;
+	/* input sanity check: */
+	if (ctx == (TCHmacState_t) 0) {
+		return TC_CRYPTO_FAIL;
+	}
 
-    memcpy(&ctx->block[ctx->len], message, rem_len);
+	(void)tc_sha256_update(&ctx->hash_state, data, data_length);
 
-    if (ctx->len + len < SHA256_BLOCK_SIZE) {
-        ctx->len += len;
-        return;
-    }
-
-    new_len = len - rem_len;
-    block_nb = new_len / SHA256_BLOCK_SIZE;
-
-    shifted_message = message + rem_len;
-
-    sha256_transf(ctx, ctx->block, 1);
-    sha256_transf(ctx, shifted_message, block_nb);
-
-    rem_len = new_len % SHA256_BLOCK_SIZE;
-
-    memcpy(ctx->block, &shifted_message[block_nb << 6],
-           rem_len);
-
-    ctx->len = rem_len;
-    ctx->tot_len += (block_nb + 1) << 6;
+	return TC_CRYPTO_SUCCESS;
 }
 
-void sha256_final(sha256_ctx *ctx, unsigned char *digest)
+int tc_hmac_final(uint8_t *tag, unsigned int taglen, TCHmacState_t ctx)
 {
-    unsigned int block_nb;
-    unsigned int pm_len;
-    unsigned int len_b;
 
-#ifndef UNROLL_LOOPS
-    int i;
-#endif
+	/* input sanity check: */
+	if (tag == (uint8_t *) 0 ||
+	    taglen != TC_SHA256_DIGEST_SIZE ||
+	    ctx == (TCHmacState_t) 0) {
+		return TC_CRYPTO_FAIL;
+	}
 
-    block_nb = (1 + ((SHA256_BLOCK_SIZE - 9)
-                     < (ctx->len % SHA256_BLOCK_SIZE)));
+	(void) tc_sha256_final(tag, &ctx->hash_state);
 
-    len_b = (ctx->tot_len + ctx->len) << 3;
-    pm_len = block_nb << 6;
+	(void)tc_sha256_init(&ctx->hash_state);
+	(void)tc_sha256_update(&ctx->hash_state,
+			       &ctx->key[TC_SHA256_BLOCK_SIZE],
+				TC_SHA256_BLOCK_SIZE);
+	(void)tc_sha256_update(&ctx->hash_state, tag, TC_SHA256_DIGEST_SIZE);
+	(void)tc_sha256_final(tag, &ctx->hash_state);
 
-    memset(ctx->block + ctx->len, 0, pm_len - ctx->len);
-    ctx->block[ctx->len] = 0x80;
-    UNPACK32(len_b, ctx->block + pm_len - 4);
+	/* destroy the current state */
+	_set(ctx, 0, sizeof(*ctx));
 
-    sha256_transf(ctx, ctx->block, block_nb);
-
-#ifndef UNROLL_LOOPS
-    for (i = 0 ; i < 8; i++) {
-        UNPACK32(ctx->h[i], &digest[i << 2]);
-    }
-#else
-   UNPACK32(ctx->h[0], &digest[ 0]);
-   UNPACK32(ctx->h[1], &digest[ 4]);
-   UNPACK32(ctx->h[2], &digest[ 8]);
-   UNPACK32(ctx->h[3], &digest[12]);
-   UNPACK32(ctx->h[4], &digest[16]);
-   UNPACK32(ctx->h[5], &digest[20]);
-   UNPACK32(ctx->h[6], &digest[24]);
-   UNPACK32(ctx->h[7], &digest[28]);
-#endif /* !UNROLL_LOOPS */
+	return TC_CRYPTO_SUCCESS;
 }
 
-/* SHA-512 functions */
 
-void sha512_transf(sha512_ctx *ctx, const unsigned char *message,
-                   unsigned int block_nb)
+/* sha256.c - TinyCrypt SHA-256 crypto hash algorithm implementation */
+
+/*
+ *  Copyright (C) 2017 by Intel Corporation, All Rights Reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *    - Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *
+ *    - Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ *    - Neither the name of Intel Corporation nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ *  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ *  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ *  POSSIBILITY OF SUCH DAMAGE.
+ */
+
+static void compress(unsigned int *iv, const uint8_t *data);
+
+int tc_sha256_init(TCSha256State_t s)
 {
-    uint64 w[80];
-    uint64 wv[8];
-    uint64 t1, t2;
-    const unsigned char *sub_block;
-    int i, j;
+	/* input sanity check: */
+	if (s == (TCSha256State_t) 0) {
+		return TC_CRYPTO_FAIL;
+	}
 
-    for (i = 0; i < (int) block_nb; i++) {
-        sub_block = message + (i << 7);
+	/*
+	 * Setting the initial state values.
+	 * These values correspond to the first 32 bits of the fractional parts
+	 * of the square roots of the first 8 primes: 2, 3, 5, 7, 11, 13, 17
+	 * and 19.
+	 */
+	_set((uint8_t *) s, 0x00, sizeof(*s));
+	s->iv[0] = 0x6a09e667;
+	s->iv[1] = 0xbb67ae85;
+	s->iv[2] = 0x3c6ef372;
+	s->iv[3] = 0xa54ff53a;
+	s->iv[4] = 0x510e527f;
+	s->iv[5] = 0x9b05688c;
+	s->iv[6] = 0x1f83d9ab;
+	s->iv[7] = 0x5be0cd19;
 
-#ifndef UNROLL_LOOPS
-        for (j = 0; j < 16; j++) {
-            PACK64(&sub_block[j << 3], &w[j]);
-        }
-
-        for (j = 16; j < 80; j++) {
-            SHA512_SCR(j);
-        }
-
-        for (j = 0; j < 8; j++) {
-            wv[j] = ctx->h[j];
-        }
-
-        for (j = 0; j < 80; j++) {
-            t1 = wv[7] + SHA512_F2(wv[4]) + CH(wv[4], wv[5], wv[6])
-                + sha512_k[j] + w[j];
-            t2 = SHA512_F1(wv[0]) + MAJ(wv[0], wv[1], wv[2]);
-            wv[7] = wv[6];
-            wv[6] = wv[5];
-            wv[5] = wv[4];
-            wv[4] = wv[3] + t1;
-            wv[3] = wv[2];
-            wv[2] = wv[1];
-            wv[1] = wv[0];
-            wv[0] = t1 + t2;
-        }
-
-        for (j = 0; j < 8; j++) {
-            ctx->h[j] += wv[j];
-        }
-#else
-        PACK64(&sub_block[  0], &w[ 0]); PACK64(&sub_block[  8], &w[ 1]);
-        PACK64(&sub_block[ 16], &w[ 2]); PACK64(&sub_block[ 24], &w[ 3]);
-        PACK64(&sub_block[ 32], &w[ 4]); PACK64(&sub_block[ 40], &w[ 5]);
-        PACK64(&sub_block[ 48], &w[ 6]); PACK64(&sub_block[ 56], &w[ 7]);
-        PACK64(&sub_block[ 64], &w[ 8]); PACK64(&sub_block[ 72], &w[ 9]);
-        PACK64(&sub_block[ 80], &w[10]); PACK64(&sub_block[ 88], &w[11]);
-        PACK64(&sub_block[ 96], &w[12]); PACK64(&sub_block[104], &w[13]);
-        PACK64(&sub_block[112], &w[14]); PACK64(&sub_block[120], &w[15]);
-
-        SHA512_SCR(16); SHA512_SCR(17); SHA512_SCR(18); SHA512_SCR(19);
-        SHA512_SCR(20); SHA512_SCR(21); SHA512_SCR(22); SHA512_SCR(23);
-        SHA512_SCR(24); SHA512_SCR(25); SHA512_SCR(26); SHA512_SCR(27);
-        SHA512_SCR(28); SHA512_SCR(29); SHA512_SCR(30); SHA512_SCR(31);
-        SHA512_SCR(32); SHA512_SCR(33); SHA512_SCR(34); SHA512_SCR(35);
-        SHA512_SCR(36); SHA512_SCR(37); SHA512_SCR(38); SHA512_SCR(39);
-        SHA512_SCR(40); SHA512_SCR(41); SHA512_SCR(42); SHA512_SCR(43);
-        SHA512_SCR(44); SHA512_SCR(45); SHA512_SCR(46); SHA512_SCR(47);
-        SHA512_SCR(48); SHA512_SCR(49); SHA512_SCR(50); SHA512_SCR(51);
-        SHA512_SCR(52); SHA512_SCR(53); SHA512_SCR(54); SHA512_SCR(55);
-        SHA512_SCR(56); SHA512_SCR(57); SHA512_SCR(58); SHA512_SCR(59);
-        SHA512_SCR(60); SHA512_SCR(61); SHA512_SCR(62); SHA512_SCR(63);
-        SHA512_SCR(64); SHA512_SCR(65); SHA512_SCR(66); SHA512_SCR(67);
-        SHA512_SCR(68); SHA512_SCR(69); SHA512_SCR(70); SHA512_SCR(71);
-        SHA512_SCR(72); SHA512_SCR(73); SHA512_SCR(74); SHA512_SCR(75);
-        SHA512_SCR(76); SHA512_SCR(77); SHA512_SCR(78); SHA512_SCR(79);
-
-        wv[0] = ctx->h[0]; wv[1] = ctx->h[1];
-        wv[2] = ctx->h[2]; wv[3] = ctx->h[3];
-        wv[4] = ctx->h[4]; wv[5] = ctx->h[5];
-        wv[6] = ctx->h[6]; wv[7] = ctx->h[7];
-
-        j = 0;
-
-        do {
-            SHA512_EXP(0,1,2,3,4,5,6,7,j); j++;
-            SHA512_EXP(7,0,1,2,3,4,5,6,j); j++;
-            SHA512_EXP(6,7,0,1,2,3,4,5,j); j++;
-            SHA512_EXP(5,6,7,0,1,2,3,4,j); j++;
-            SHA512_EXP(4,5,6,7,0,1,2,3,j); j++;
-            SHA512_EXP(3,4,5,6,7,0,1,2,j); j++;
-            SHA512_EXP(2,3,4,5,6,7,0,1,j); j++;
-            SHA512_EXP(1,2,3,4,5,6,7,0,j); j++;
-        } while (j < 80);
-
-        ctx->h[0] += wv[0]; ctx->h[1] += wv[1];
-        ctx->h[2] += wv[2]; ctx->h[3] += wv[3];
-        ctx->h[4] += wv[4]; ctx->h[5] += wv[5];
-        ctx->h[6] += wv[6]; ctx->h[7] += wv[7];
-#endif /* !UNROLL_LOOPS */
-    }
+	return TC_CRYPTO_SUCCESS;
 }
 
-void sha512(const unsigned char *message, unsigned int len,
-            unsigned char *digest)
+int tc_sha256_update(TCSha256State_t s, const uint8_t *data, size_t datalen)
 {
-    sha512_ctx ctx;
+	/* input sanity check: */
+	if (s == (TCSha256State_t) 0 ||
+	    data == (void *) 0) {
+		return TC_CRYPTO_FAIL;
+	} else if (datalen == 0) {
+		return TC_CRYPTO_SUCCESS;
+	}
 
-    sha512_init(&ctx);
-    sha512_update(&ctx, message, len);
-    sha512_final(&ctx, digest);
+	while (datalen-- > 0) {
+		s->leftover[s->leftover_offset++] = *(data++);
+		if (s->leftover_offset >= TC_SHA256_BLOCK_SIZE) {
+			compress(s->iv, s->leftover);
+			s->leftover_offset = 0;
+			s->bits_hashed += (TC_SHA256_BLOCK_SIZE << 3);
+		}
+	}
+
+	return TC_CRYPTO_SUCCESS;
 }
 
-void sha512_init(sha512_ctx *ctx)
+int tc_sha256_final(uint8_t *digest, TCSha256State_t s)
 {
-#ifndef UNROLL_LOOPS
-    int i;
-    for (i = 0; i < 8; i++) {
-        ctx->h[i] = sha512_h0[i];
-    }
-#else
-    ctx->h[0] = sha512_h0[0]; ctx->h[1] = sha512_h0[1];
-    ctx->h[2] = sha512_h0[2]; ctx->h[3] = sha512_h0[3];
-    ctx->h[4] = sha512_h0[4]; ctx->h[5] = sha512_h0[5];
-    ctx->h[6] = sha512_h0[6]; ctx->h[7] = sha512_h0[7];
-#endif /* !UNROLL_LOOPS */
+	unsigned int i;
 
-    ctx->len = 0;
-    ctx->tot_len = 0;
+	/* input sanity check: */
+	if (digest == (uint8_t *) 0 ||
+	    s == (TCSha256State_t) 0) {
+		return TC_CRYPTO_FAIL;
+	}
+
+	s->bits_hashed += (s->leftover_offset << 3);
+
+	s->leftover[s->leftover_offset++] = 0x80; /* always room for one byte */
+	if (s->leftover_offset > (sizeof(s->leftover) - 8)) {
+		/* there is not room for all the padding in this block */
+		_set(s->leftover + s->leftover_offset, 0x00,
+		     sizeof(s->leftover) - s->leftover_offset);
+		compress(s->iv, s->leftover);
+		s->leftover_offset = 0;
+	}
+
+	/* add the padding and the length in big-Endian format */
+	_set(s->leftover + s->leftover_offset, 0x00,
+	     sizeof(s->leftover) - 8 - s->leftover_offset);
+	s->leftover[sizeof(s->leftover) - 1] = (uint8_t)(s->bits_hashed);
+	s->leftover[sizeof(s->leftover) - 2] = (uint8_t)(s->bits_hashed >> 8);
+	s->leftover[sizeof(s->leftover) - 3] = (uint8_t)(s->bits_hashed >> 16);
+	s->leftover[sizeof(s->leftover) - 4] = (uint8_t)(s->bits_hashed >> 24);
+	s->leftover[sizeof(s->leftover) - 5] = (uint8_t)(s->bits_hashed >> 32);
+	s->leftover[sizeof(s->leftover) - 6] = (uint8_t)(s->bits_hashed >> 40);
+	s->leftover[sizeof(s->leftover) - 7] = (uint8_t)(s->bits_hashed >> 48);
+	s->leftover[sizeof(s->leftover) - 8] = (uint8_t)(s->bits_hashed >> 56);
+
+	/* hash the padding and length */
+	compress(s->iv, s->leftover);
+
+	/* copy the iv out to digest */
+	for (i = 0; i < TC_SHA256_STATE_BLOCKS; ++i) {
+		unsigned int t = *((unsigned int *) &s->iv[i]);
+		*digest++ = (uint8_t)(t >> 24);
+		*digest++ = (uint8_t)(t >> 16);
+		*digest++ = (uint8_t)(t >> 8);
+		*digest++ = (uint8_t)(t);
+	}
+
+	/* destroy the current state */
+	_set(s, 0, sizeof(*s));
+
+	return TC_CRYPTO_SUCCESS;
 }
 
-void sha512_update(sha512_ctx *ctx, const unsigned char *message,
-                   unsigned int len)
+/*
+ * Initializing SHA-256 Hash constant words K.
+ * These values correspond to the first 32 bits of the fractional parts of the
+ * cube roots of the first 64 primes between 2 and 311.
+ */
+static const unsigned int k256[64] = {
+	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+	0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+	0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+	0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+	0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+	0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+	0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+	0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+	0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+	0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+};
+
+static inline unsigned int ROTR(unsigned int a, unsigned int n)
 {
-    unsigned int block_nb;
-    unsigned int new_len, rem_len, tmp_len;
-    const unsigned char *shifted_message;
-
-    tmp_len = SHA512_BLOCK_SIZE - ctx->len;
-    rem_len = len < tmp_len ? len : tmp_len;
-
-    memcpy(&ctx->block[ctx->len], message, rem_len);
-
-    if (ctx->len + len < SHA512_BLOCK_SIZE) {
-        ctx->len += len;
-        return;
-    }
-
-    new_len = len - rem_len;
-    block_nb = new_len / SHA512_BLOCK_SIZE;
-
-    shifted_message = message + rem_len;
-
-    sha512_transf(ctx, ctx->block, 1);
-    sha512_transf(ctx, shifted_message, block_nb);
-
-    rem_len = new_len % SHA512_BLOCK_SIZE;
-
-    memcpy(ctx->block, &shifted_message[block_nb << 7],
-           rem_len);
-
-    ctx->len = rem_len;
-    ctx->tot_len += (block_nb + 1) << 7;
+	return (((a) >> n) | ((a) << (32 - n)));
 }
 
-void sha512_final(sha512_ctx *ctx, unsigned char *digest)
+#define Sigma0(a)(ROTR((a), 2) ^ ROTR((a), 13) ^ ROTR((a), 22))
+#define Sigma1(a)(ROTR((a), 6) ^ ROTR((a), 11) ^ ROTR((a), 25))
+#define sigma0(a)(ROTR((a), 7) ^ ROTR((a), 18) ^ ((a) >> 3))
+#define sigma1(a)(ROTR((a), 17) ^ ROTR((a), 19) ^ ((a) >> 10))
+
+#define Ch(a, b, c)(((a) & (b)) ^ ((~(a)) & (c)))
+#define Maj(a, b, c)(((a) & (b)) ^ ((a) & (c)) ^ ((b) & (c)))
+
+static inline unsigned int BigEndian(const uint8_t **c)
 {
-    unsigned int block_nb;
-    unsigned int pm_len;
-    unsigned int len_b;
+	unsigned int n = 0;
 
-#ifndef UNROLL_LOOPS
-    int i;
-#endif
-
-    block_nb = 1 + ((SHA512_BLOCK_SIZE - 17)
-                     < (ctx->len % SHA512_BLOCK_SIZE));
-
-    len_b = (ctx->tot_len + ctx->len) << 3;
-    pm_len = block_nb << 7;
-
-    memset(ctx->block + ctx->len, 0, pm_len - ctx->len);
-    ctx->block[ctx->len] = 0x80;
-    UNPACK32(len_b, ctx->block + pm_len - 4);
-
-    sha512_transf(ctx, ctx->block, block_nb);
-
-#ifndef UNROLL_LOOPS
-    for (i = 0 ; i < 8; i++) {
-        UNPACK64(ctx->h[i], &digest[i << 3]);
-    }
-#else
-    UNPACK64(ctx->h[0], &digest[ 0]);
-    UNPACK64(ctx->h[1], &digest[ 8]);
-    UNPACK64(ctx->h[2], &digest[16]);
-    UNPACK64(ctx->h[3], &digest[24]);
-    UNPACK64(ctx->h[4], &digest[32]);
-    UNPACK64(ctx->h[5], &digest[40]);
-    UNPACK64(ctx->h[6], &digest[48]);
-    UNPACK64(ctx->h[7], &digest[56]);
-#endif /* !UNROLL_LOOPS */
+	n = (((unsigned int)(*((*c)++))) << 24);
+	n |= ((unsigned int)(*((*c)++)) << 16);
+	n |= ((unsigned int)(*((*c)++)) << 8);
+	n |= ((unsigned int)(*((*c)++)));
+	return n;
 }
 
-/* SHA-384 functions */
-
-void sha384(const unsigned char *message, unsigned int len,
-            unsigned char *digest)
+static void compress(unsigned int *iv, const uint8_t *data)
 {
-    sha384_ctx ctx;
+	unsigned int a, b, c, d, e, f, g, h;
+	unsigned int s0, s1;
+	unsigned int t1, t2;
+	unsigned int work_space[16];
+	unsigned int n;
+	unsigned int i;
 
-    sha384_init(&ctx);
-    sha384_update(&ctx, message, len);
-    sha384_final(&ctx, digest);
-}
+	a = iv[0]; b = iv[1]; c = iv[2]; d = iv[3];
+	e = iv[4]; f = iv[5]; g = iv[6]; h = iv[7];
 
-void sha384_init(sha384_ctx *ctx)
-{
-#ifndef UNROLL_LOOPS
-    int i;
-    for (i = 0; i < 8; i++) {
-        ctx->h[i] = sha384_h0[i];
-    }
-#else
-    ctx->h[0] = sha384_h0[0]; ctx->h[1] = sha384_h0[1];
-    ctx->h[2] = sha384_h0[2]; ctx->h[3] = sha384_h0[3];
-    ctx->h[4] = sha384_h0[4]; ctx->h[5] = sha384_h0[5];
-    ctx->h[6] = sha384_h0[6]; ctx->h[7] = sha384_h0[7];
-#endif /* !UNROLL_LOOPS */
+	for (i = 0; i < 16; ++i) {
+		n = BigEndian(&data);
+		t1 = work_space[i] = n;
+		t1 += h + Sigma1(e) + Ch(e, f, g) + k256[i];
+		t2 = Sigma0(a) + Maj(a, b, c);
+		h = g; g = f; f = e; e = d + t1;
+		d = c; c = b; b = a; a = t1 + t2;
+	}
 
-    ctx->len = 0;
-    ctx->tot_len = 0;
-}
+	for ( ; i < 64; ++i) {
+		s0 = work_space[(i+1)&0x0f];
+		s0 = sigma0(s0);
+		s1 = work_space[(i+14)&0x0f];
+		s1 = sigma1(s1);
 
-void sha384_update(sha384_ctx *ctx, const unsigned char *message,
-                   unsigned int len)
-{
-    unsigned int block_nb;
-    unsigned int new_len, rem_len, tmp_len;
-    const unsigned char *shifted_message;
+		t1 = work_space[i&0xf] += s0 + s1 + work_space[(i+9)&0xf];
+		t1 += h + Sigma1(e) + Ch(e, f, g) + k256[i];
+		t2 = Sigma0(a) + Maj(a, b, c);
+		h = g; g = f; f = e; e = d + t1;
+		d = c; c = b; b = a; a = t1 + t2;
+	}
 
-    tmp_len = SHA384_BLOCK_SIZE - ctx->len;
-    rem_len = len < tmp_len ? len : tmp_len;
-
-    memcpy(&ctx->block[ctx->len], message, rem_len);
-
-    if (ctx->len + len < SHA384_BLOCK_SIZE) {
-        ctx->len += len;
-        return;
-    }
-
-    new_len = len - rem_len;
-    block_nb = new_len / SHA384_BLOCK_SIZE;
-
-    shifted_message = message + rem_len;
-
-    sha512_transf(ctx, ctx->block, 1);
-    sha512_transf(ctx, shifted_message, block_nb);
-
-    rem_len = new_len % SHA384_BLOCK_SIZE;
-
-    memcpy(ctx->block, &shifted_message[block_nb << 7],
-           rem_len);
-
-    ctx->len = rem_len;
-    ctx->tot_len += (block_nb + 1) << 7;
-}
-
-void sha384_final(sha384_ctx *ctx, unsigned char *digest)
-{
-    unsigned int block_nb;
-    unsigned int pm_len;
-    unsigned int len_b;
-
-#ifndef UNROLL_LOOPS
-    int i;
-#endif
-
-    block_nb = (1 + ((SHA384_BLOCK_SIZE - 17)
-                     < (ctx->len % SHA384_BLOCK_SIZE)));
-
-    len_b = (ctx->tot_len + ctx->len) << 3;
-    pm_len = block_nb << 7;
-
-    memset(ctx->block + ctx->len, 0, pm_len - ctx->len);
-    ctx->block[ctx->len] = 0x80;
-    UNPACK32(len_b, ctx->block + pm_len - 4);
-
-    sha512_transf(ctx, ctx->block, block_nb);
-
-#ifndef UNROLL_LOOPS
-    for (i = 0 ; i < 6; i++) {
-        UNPACK64(ctx->h[i], &digest[i << 3]);
-    }
-#else
-    UNPACK64(ctx->h[0], &digest[ 0]);
-    UNPACK64(ctx->h[1], &digest[ 8]);
-    UNPACK64(ctx->h[2], &digest[16]);
-    UNPACK64(ctx->h[3], &digest[24]);
-    UNPACK64(ctx->h[4], &digest[32]);
-    UNPACK64(ctx->h[5], &digest[40]);
-#endif /* !UNROLL_LOOPS */
-}
-
-/* SHA-224 functions */
-
-void sha224(const unsigned char *message, unsigned int len,
-            unsigned char *digest)
-{
-    sha224_ctx ctx;
-
-    sha224_init(&ctx);
-    sha224_update(&ctx, message, len);
-    sha224_final(&ctx, digest);
-}
-
-void sha224_init(sha224_ctx *ctx)
-{
-#ifndef UNROLL_LOOPS
-    int i;
-    for (i = 0; i < 8; i++) {
-        ctx->h[i] = sha224_h0[i];
-    }
-#else
-    ctx->h[0] = sha224_h0[0]; ctx->h[1] = sha224_h0[1];
-    ctx->h[2] = sha224_h0[2]; ctx->h[3] = sha224_h0[3];
-    ctx->h[4] = sha224_h0[4]; ctx->h[5] = sha224_h0[5];
-    ctx->h[6] = sha224_h0[6]; ctx->h[7] = sha224_h0[7];
-#endif /* !UNROLL_LOOPS */
-
-    ctx->len = 0;
-    ctx->tot_len = 0;
-}
-
-void sha224_update(sha224_ctx *ctx, const unsigned char *message,
-                   unsigned int len)
-{
-    unsigned int block_nb;
-    unsigned int new_len, rem_len, tmp_len;
-    const unsigned char *shifted_message;
-
-    tmp_len = SHA224_BLOCK_SIZE - ctx->len;
-    rem_len = len < tmp_len ? len : tmp_len;
-
-    memcpy(&ctx->block[ctx->len], message, rem_len);
-
-    if (ctx->len + len < SHA224_BLOCK_SIZE) {
-        ctx->len += len;
-        return;
-    }
-
-    new_len = len - rem_len;
-    block_nb = new_len / SHA224_BLOCK_SIZE;
-
-    shifted_message = message + rem_len;
-
-    sha256_transf(ctx, ctx->block, 1);
-    sha256_transf(ctx, shifted_message, block_nb);
-
-    rem_len = new_len % SHA224_BLOCK_SIZE;
-
-    memcpy(ctx->block, &shifted_message[block_nb << 6],
-           rem_len);
-
-    ctx->len = rem_len;
-    ctx->tot_len += (block_nb + 1) << 6;
-}
-
-void sha224_final(sha224_ctx *ctx, unsigned char *digest)
-{
-    unsigned int block_nb;
-    unsigned int pm_len;
-    unsigned int len_b;
-
-#ifndef UNROLL_LOOPS
-    int i;
-#endif
-
-    block_nb = (1 + ((SHA224_BLOCK_SIZE - 9)
-                     < (ctx->len % SHA224_BLOCK_SIZE)));
-
-    len_b = (ctx->tot_len + ctx->len) << 3;
-    pm_len = block_nb << 6;
-
-    memset(ctx->block + ctx->len, 0, pm_len - ctx->len);
-    ctx->block[ctx->len] = 0x80;
-    UNPACK32(len_b, ctx->block + pm_len - 4);
-
-    sha256_transf(ctx, ctx->block, block_nb);
-
-#ifndef UNROLL_LOOPS
-    for (i = 0 ; i < 7; i++) {
-        UNPACK32(ctx->h[i], &digest[i << 2]);
-    }
-#else
-   UNPACK32(ctx->h[0], &digest[ 0]);
-   UNPACK32(ctx->h[1], &digest[ 4]);
-   UNPACK32(ctx->h[2], &digest[ 8]);
-   UNPACK32(ctx->h[3], &digest[12]);
-   UNPACK32(ctx->h[4], &digest[16]);
-   UNPACK32(ctx->h[5], &digest[20]);
-   UNPACK32(ctx->h[6], &digest[24]);
-#endif /* !UNROLL_LOOPS */
+	iv[0] += a; iv[1] += b; iv[2] += c; iv[3] += d;
+	iv[4] += e; iv[5] += f; iv[6] += g; iv[7] += h;
 }

@@ -13,3 +13,6 @@
 [submodule "hmac"]
 	path = hmac
 	url = https://github.com/ogay/hmac.git
+[submodule "tinycrypt"]
+	path = tinycrypt
+	url = https://github.com/intel/tinycrypt.git
