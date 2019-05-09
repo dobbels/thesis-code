@@ -74,6 +74,7 @@ uint8_t sub_offset = 16;
 //Nonce3
 uint8_t nonce3_offset = 17;
 
+
 uint8_t any_previous_key_chain_value_stored = 0;
 
 static void full_print_hex(const uint8_t* str, uint8_t length);
@@ -418,6 +419,18 @@ hid_cm_ind_req_success(uint8_t subject_id)
 	return result;
 }
 
+static uint8_t *
+get_session_key(uint8_t subject_id) {
+	struct associated_subject *current_sub;
+	int sub_index = 0;
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+		if (current_sub->id == subject_id) {
+			return associated_subjects->subject_association_set[sub_index]->session_key;
+		}
+	}
+	return NULL;
+}
+
 static void
 set_session_key(uint8_t subject_id, uint8_t * key)
 {	
@@ -431,6 +444,18 @@ set_session_key(uint8_t subject_id, uint8_t * key)
 			);
 		}
 	}
+}
+
+static uint8_t *
+get_nonce_sr(uint8_t subject_id) {
+	struct associated_subject *current_sub;
+	int sub_index = 0;
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+		if (current_sub->id == subject_id) {
+			return associated_subjects->subject_association_set[sub_index]->nonce_sr;
+		}
+	}
+	return NULL;
 }
 
 static uint8_t
@@ -468,108 +493,129 @@ perform_task(uint8_t *policy, int task_bit_index)
 	printf("Error processing task %d.\n", function);
 }
 
+//Expectation: data points to value behind sub_id in the message. Data before the hash is padded to fit a full byte
 static uint8_t
 handle_subject_access_request(const uint8_t *data,
         uint16_t datalen,
-        uint8_t sub_id,
-        int bit_index)
+        uint8_t sub_id)
 {
-	//Expected demo format: Action: PUT + Task: light_switch_x TODO is veranderd!
-	uint8_t action = get_char_from(bit_index, data);
-	bit_index += 8;
-	uint8_t function = get_char_from(bit_index, data);
-	bit_index += 8;
-
-	// print request (if it is the expected demo request)
-	if (action == 2 && function == 18) {
-		printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
-	} else if (action == 2 && function == 19) {
-		printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
-	} else {
-		printf("Did not receive the expected demo-request.\n");
-		return 0;
+	uint8_t * session_key = get_session_key(sub_id);
+	if (session_key == NULL) {
+		printf("Error: retrieving session key");
 	}
 
-	// Search for first policy associated with this subject
-	char exists = 0;
-	struct associated_subject *current_sub;
-	int sub_index = 0;
-	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
-		current_sub = associated_subjects->subject_association_set[sub_index];
-		if (current_sub->id == sub_id) {
-			exists = 1;
-			break;
-		}
-	}
-	if (exists) {
-		// Assumption for demo purposes: 1 single rule inside the policy
-		char rule_checks_out = 0;
+	//Decrypt whole message
+	xcrypt_ctr(session_key, data, datalen);
 
-//		printf(" : %d\n", );
-		// Search for rule about action PUT. TODO include action=ANY and rule without an action specified
-		if (!policy_has_at_least_one_rule(current_sub->policy)) {
-			rule_checks_out = get_policy_effect(current_sub->policy);
-		} else {
-			// Assumption for demo purposes: 1 single rule inside the policy
-			int rule_bit_index = 13;
-			if (rule_has_action(current_sub->policy, rule_bit_index)
-					&& rule_get_action(current_sub->policy, rule_bit_index) == action){
-				// Assumption for demo purposes: 1 single expression inside the rule
-				int exp_bit_index = rule_get_first_exp_index(current_sub->policy,rule_bit_index);
-				//Check condition
-				uint8_t condition_met = condition_is_met(current_sub->policy,exp_bit_index);
-				if (!condition_met && rule_get_effect(current_sub->policy, rule_bit_index) == 0) {
-					printf("Condition was met, therefore access is granted.\n");
-					rule_checks_out = 1;
-				} else if (condition_met && rule_get_effect(current_sub->policy, rule_bit_index) == 1) {
-					printf("Condition was not met, therefore access is granted.\n");
-					rule_checks_out = 1;
-				} else {
-					printf("Rule effect is %d, while condition result was %d => Access denied.\n", rule_get_effect(current_sub->policy, rule_bit_index), condition_is_met(current_sub->policy,exp_bit_index));
-				}
-				//Enforce obligations
-				if (rule_has_at_least_one_obligation(current_sub->policy, rule_bit_index)) {
+	//Check validity
+	uint32_t hashed;
+	hashed = murmur3_32(data, 3, 17);
+	if ((data[3] == (hashed >> 24) & 0xff) && (data[4] = (hashed >> 16) & 0xff) &&
+	(data[5] = (hashed >> 8)  & 0xff) && (data[6] = hashed & 0xff)) {
+		//Expected demo format: Action: PUT + Task: light_switch_x TODO is veranderd!
+		uint8_t action = data[0];
+		uint8_t function = data[1];
 
-					// Assumption for demo purposes: 1 single obligation inside the rule
-					int obl_bit_index = rule_get_first_obl_index(current_sub->policy,rule_bit_index);
-
-					//Always execute task || Obligation has fulfill_on
-					if (!obligation_has_fulfill_on(current_sub->policy, obl_bit_index)) {
-						perform_task(current_sub->policy,obl_bit_index);
-					}
-					//Check if existing fulfill_on matches rule outcome
-					else if (obligation_get_fulfill_on(current_sub->policy, obl_bit_index) == rule_checks_out) {
-						perform_task(current_sub->policy,obl_bit_index);
-					}
-				}
-			}
+		if (get_bit(2*8, data)){
+			printf("Error: This demo does not expect any inputs\n");
 		}
 
-		// Possibly perform operation and (non)acknowledge the subject
-		if (rule_checks_out) {
-
-			execute(function);
-
-			// Let's assume this operation requires a lot of battery
-			if (battery_level > 50) {
-				battery_level -= 50;
-				printf("new battery level: %d\n", battery_level);
-			}
-			return 1;
+		// print request (if it is the expected demo request)
+		if (action == 2 && function == 18) {
+			printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
+		} else if (action == 2 && function == 19) {
+			printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
 		} else {
-			printf("Request denied, because not all rules check out.\n");
+			printf("Did not receive the expected demo-request.\n");
 			return 0;
 		}
 
+		// Search for first policy associated with this subject
+		char exists = 0;
+		struct associated_subject *current_sub;
+		int sub_index = 0;
+		for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+			current_sub = associated_subjects->subject_association_set[sub_index];
+			if (current_sub->id == sub_id) {
+				exists = 1;
+				break;
+			}
+		}
+		if (exists) {
+			// Assumption for demo purposes: 1 single rule inside the policy
+			char rule_checks_out = 0;
+
+	//		printf(" : %d\n", );
+			// Search for rule about action PUT. TODO include action=ANY and rule without an action specified
+			if (!policy_has_at_least_one_rule(current_sub->policy)) {
+				rule_checks_out = get_policy_effect(current_sub->policy);
+			} else {
+				// Assumption for demo purposes: 1 single rule inside the policy
+				int rule_bit_index = 13;
+				if (rule_has_action(current_sub->policy, rule_bit_index)
+						&& rule_get_action(current_sub->policy, rule_bit_index) == action){
+					// Assumption for demo purposes: 1 single expression inside the rule
+					int exp_bit_index = rule_get_first_exp_index(current_sub->policy,rule_bit_index);
+					//Check condition
+					uint8_t condition_met = condition_is_met(current_sub->policy,exp_bit_index);
+					if (!condition_met && rule_get_effect(current_sub->policy, rule_bit_index) == 0) {
+						printf("Condition was met, therefore access is granted.\n");
+						rule_checks_out = 1;
+					} else if (condition_met && rule_get_effect(current_sub->policy, rule_bit_index) == 1) {
+						printf("Condition was not met, therefore access is granted.\n");
+						rule_checks_out = 1;
+					} else {
+						printf("Rule effect is %d, while condition result was %d => Access denied.\n", rule_get_effect(current_sub->policy, rule_bit_index), condition_is_met(current_sub->policy,exp_bit_index));
+					}
+					//Enforce obligations
+					if (rule_has_at_least_one_obligation(current_sub->policy, rule_bit_index)) {
+
+						// Assumption for demo purposes: 1 single obligation inside the rule
+						int obl_bit_index = rule_get_first_obl_index(current_sub->policy,rule_bit_index);
+
+						//Always execute task || Obligation has fulfill_on
+						if (!obligation_has_fulfill_on(current_sub->policy, obl_bit_index)) {
+							perform_task(current_sub->policy,obl_bit_index);
+						}
+						//Check if existing fulfill_on matches rule outcome
+						else if (obligation_get_fulfill_on(current_sub->policy, obl_bit_index) == rule_checks_out) {
+							perform_task(current_sub->policy,obl_bit_index);
+						}
+					}
+				}
+			}
+
+			// Possibly perform operation and (non)acknowledge the subject
+			if (rule_checks_out) {
+
+				execute(function);
+
+				// Let's assume this operation requires a lot of battery
+				if (battery_level > 50) {
+					battery_level -= 50;
+					printf("new battery level: %d\n", battery_level);
+				}
+				return 1;
+			} else {
+				printf("Request denied, because not all rules check out.\n");
+				return 0;
+			}
+
+		} else {
+			// deny if no association with subject exists
+			printf("Request denied, because no association with this subject exists.\n");
+			return 0;
+		}
 	} else {
-		// deny if no association with subject exists
-		printf("Request denied, because no association with this subject exists.\n");
+		printf("Request denied, hash does not match.\n");
 		return 0;
 	}
 }
 
 static uint8_t
-process_s_r_req(const uint8_t *data,
+process_s_r_req(struct simple_udp_connection *c,
+        const uip_ipaddr_t *sender_addr,
+        const uint8_t *data,
 		uint16_t datalen) {
 	const char * filename = "properties";
 //	static uint8_t messaging_buffer[60];
@@ -590,13 +636,9 @@ process_s_r_req(const uint8_t *data,
 		xcrypt_ctr(messaging_buffer, messaging_buffer + 26, 26);
 
 		// Check NonceSR from AuthNr against stored value
-		uint8_t nonce_sr_from_storage[8];
-		int fd_read = cfs_open(filename, CFS_READ);
-		if(fd_read != -1) {
-			cfs_read(fd_read, nonce_sr_from_storage, 8);
-			cfs_close(fd_read);
-		} else {
-		   printf("Error: could not read NonceSR from memory.\n");
+		uint8_t * nonce_sr_from_storage = get_nonce_sr(subject_id);
+		if (nonce_sr_from_storage == NULL) {
+			printf("Error: retrieving nonceSR");
 		}
 
 		if (memcmp(nonce_sr_from_storage, messaging_buffer + 28, 8) != 0) {
@@ -619,18 +661,24 @@ process_s_r_req(const uint8_t *data,
 		// Accept and store subkey/session key (in memory allocated for this subject)
 		set_session_key(subject_id, messaging_buffer + 36);
 
-		// Store Nonce4
-		int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-		if (fd_write != -1) {
-			int n = cfs_write(fd_write, messaging_buffer + 52, 8);
-			cfs_close(fd_write);
-			printf("Successfully written Nonce4 (%i bytes) to %s\n", n, filename);
-			printf("\n");
-		} else {
-		   printf("Error: could not write Nonce4 to memory.\n");
-		}
-
 		set_hid_s_r_req_success(subject_id, 1);
+
+		printf("Constructing HID_S_R_REP message\n");
+		static uint8_t s_r_rep[32];
+		//Put NonceSR
+		memcpy(s_r_rep, nonce_sr_from_storage, 8);
+
+		//Put session key
+		memcpy(s_r_rep + 8, messaging_buffer + 36, 16);
+
+		//Put Nonce4
+		memcpy(s_r_rep + 24, messaging_buffer + 52, 8);
+
+		//Encrypt with ksr
+		xcrypt_ctr(messaging_buffer, s_r_rep, sizeof(s_r_rep));
+
+		// send this message
+		simple_udp_sendto(c, s_r_rep, 32, sender_addr);
 		return 1;
 	} else {
 		return 0;
@@ -650,23 +698,19 @@ receiver_subject(struct simple_udp_connection *c,
 //	PRINT6ADDR(sender_addr);
 //	printf("\nAt port %d from port %d with length %d\n",
 //		  receiver_port, sender_port, datalen);
-
+	printf("Received data from subject with length %d", datalen);
 	// Rough demo separator between access request and key establishment request
 	if (datalen > 20) {
 		//TODO handle response
-		if (process_s_r_req(data, datalen)) {
-			printf("Constructing HID_S_R_REP message\n");
-			// construct_s_r_rep message
-
-			// send this message
-
+		uint8_t result = process_s_r_req(c, sender_addr, data, datalen);
+		if (!result) {
+			send_nack(c, sender_addr);
 		}
 	} else {
 		uint8_t subject_id = data[0];
-		int bit_index = 500;
 		//TODO check nog booleans, maar lijkt wel te kloppen?
-		if (is_already_associated(subject_id) && hid_s_r_req_success(subject_id) && fresh_information(subject_id)) {
-			if (handle_subject_access_request(data, datalen, subject_id, bit_index)){
+		if (hid_s_r_req_success(subject_id) && fresh_information(subject_id)) {
+			if (handle_subject_access_request(data+1, datalen-1, subject_id)){
 				send_ack(c, sender_addr);
 			} else {
 				send_nack(c, sender_addr);
@@ -777,7 +821,7 @@ process_cm_ind(uint8_t subject_id,
 		//Store nonce_sr for this subject
 		struct nonce_sr *n =  store_nonce_sr(current_subject, messaging_buffer + 4);
 		if(n == NULL) {
-			printf("Error in store_policy()\n");
+			printf("Error in store_nonce_sr()\n");
 		}
 
 		printf("Nonce_sr:\n");

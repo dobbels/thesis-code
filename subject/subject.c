@@ -60,11 +60,13 @@ int k_sr_offset = 84;
 int nonce_sr_offset = 100;
 //Subkey (16 bytes)
 int subkey_offset = 108;
+//Nonce4
+int nonce4_offset = 124;
 
 static void full_print_hex(uint8_t* str, uint8_t length);
 static void print_hex(uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
-
+uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
 
 PROCESS(hidra_subject,"HidraSubject");
 AUTOSTART_PROCESSES(&hidra_subject);
@@ -83,15 +85,75 @@ receiver_resource(struct simple_udp_connection *c,
 	printf("\nAt port %d from port %d with length %d\n",
 		  receiver_port, sender_port, datalen);
 	printf("Data Rx: %.*s\n", datalen, data);
-	if (resource_access_requested) {
-		if(data[0]){
-			printf("End of Successful Hidra Exchange.\n");
-			security_association_established = 1;
+
+	if (datalen > 1) {
+		uint8_t s_r_rep[32];
+		memcpy(s_r_rep, data, sizeof(s_r_rep));
+
+		printf("Received HID_S_R_REP.\n");
+		//Decrypt message
+		uint8_t ksr[16];
+		int fd_read = cfs_open(filename, CFS_READ);
+		if(fd_read!=-1) {
+			cfs_seek(fd_read, k_sr_offset, CFS_SEEK_SET);
+			cfs_read(fd_read, ksr, sizeof(ksr));
+			cfs_close(fd_read);
 		} else {
-			printf("Received Non-Acknowledge: Unsuccessful hidra exchange.\n");
+			printf("Error: could not read ksr key from storage\n");
+		}
+		//TODO mag dit toch zomaar, const data aanpassen?!
+		xcrypt_ctr(ksr, s_r_rep, sizeof(s_r_rep));
+
+		//Check NonceSR
+		uint8_t nonce[8];
+		fd_read = cfs_open(filename, CFS_READ);
+		if(fd_read!=-1) {
+			cfs_seek(fd_read, nonce_sr_offset, CFS_SEEK_SET);
+			cfs_read(fd_read, nonce, sizeof(nonce));
+			cfs_close(fd_read);
+		} else {
+			printf("Error: could not read nonce_sr from storage\n");
+		}
+		if (memcmp(nonce, s_r_rep, 8) == 0){
+			//Check Nonce4
+			fd_read = cfs_open(filename, CFS_READ);
+			if(fd_read!=-1) {
+				cfs_seek(fd_read, nonce4_offset, CFS_SEEK_SET);
+				cfs_read(fd_read, nonce, sizeof(nonce));
+				cfs_close(fd_read);
+			} else {
+				printf("Error: could not read nonce4 from storage\n");
+			}
+			if (memcmp(nonce, s_r_rep + 24, 8) == 0){
+				//Check session key
+				uint8_t session_key[16];
+				fd_read = cfs_open(filename, CFS_READ);
+				if(fd_read!=-1) {
+					cfs_seek(fd_read, subkey_offset, CFS_SEEK_SET);
+					cfs_read(fd_read, session_key, sizeof(session_key));
+					cfs_close(fd_read);
+				} else {
+					printf("Error: could not read session key from storage\n");
+				}
+				if (memcmp(session_key, s_r_rep + 8, 16) != 0){
+					printf("Resource proposed different key\n");
+					//Store key
+
+				}
+				security_association_established = 1;
+				printf("End of Successful Hidra Exchange.\n");
+			} else {
+				printf("Wrong Nonce4 HID_S_R_REP.\n");
+			}
+		} else {
+			printf("Wrong NonceSR HID_S_R_REP.\n");
 		}
 	} else {
-		printf("Unexpected message from resource\n");
+		if(data[0]){
+			printf("Received Acknowledge.\n");
+		} else {
+			printf("Received Non-Acknowledge.\n");
+		}
 	}
 }
 
@@ -526,16 +588,38 @@ start_hidra_protocol(void) {
 }
 
 static void
-send_access_request(void) { //TODO encrypted with K(s,r) and/or rather authenticated with MAC? -> encrypt(message + hash(message)) using subkey
+send_access_request(void) { //TODO encrypted with Subkey and/or rather authenticated with MAC? -> encrypt(message + hash(message)) using subkey
+	const uint8_t response[8];
+
 	//Content of access request, all full bytes for simplicity
-	// = id (1 byte) + action (1 byte) + system_reference (1 byte) ( + inputs)
-	const char action =  2;//PUT
-	const char function =  18;
+	// = id (1 byte) + action (1 byte) + function:system_reference (1 byte) + input existence (1 bit) ( + inputs) + padding + hash (4 bytes)
+	response[0] = subject_id;
+	response[1] = 2;
+	response[2] = 18;
+	response[3] = 0; // Input non-existence bit padded with 7 extra zero-bits
 	// input existence boolean: if input exists, first bit is set to 1 and input couples <type,value> follow
-	//TODO => minstens 4 bytes, remember.
-	const char input_existence = 0;
-	const char attribute = 0;
-	const char response[3] = {subject_id, action, function};
+
+	// Calculate 4 byte hash of action + function + rest
+	uint32_t hashed;
+	hashed = murmur3_32(response + 1, 3, 17);
+	response[4] = (hashed >> 24) & 0xff;
+	response[5] = (hashed >> 16) & 0xff;
+	response[6] = (hashed >> 8)  & 0xff;
+	response[7] = hashed & 0xff;
+
+	//Get session key from storage
+	uint8_t session_key[16];
+	int fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+	   cfs_seek(fd_read, subkey_offset, CFS_SEEK_SET);
+	   cfs_read(fd_read, session_key, sizeof(session_key));
+	   cfs_close(fd_read);
+	 } else {
+	   printf("Error: could not read session key from storage\n");
+	 }
+
+	// Encrypt all bytes except the first (subject id)
+	xcrypt_ctr(session_key, response+1, sizeof(response) - 1);
 
 	//TODO nieuwe hmac/hash van alles, maar subject id niet encrypteren, anders heeft resource geen idee welke sleutel te gebruiken
 	simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
@@ -1227,3 +1311,45 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 }
 //END OF CODE FROM tiny AES PROJECT
 /////////////////////////////////////////
+
+//Hash to 32 bits from https://en.wikipedia.org/wiki/MurmurHash
+uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
+{
+	printf("Values to hash\n");
+	full_print_hex(key, len);
+	uint32_t h = seed;
+	if (len > 3) {
+		const uint32_t* key_x4 = (const uint32_t*) key;
+		size_t i = len >> 2;
+		do {
+			uint32_t k = *key_x4++;
+			k *= 0xcc9e2d51;
+			k = (k << 15) | (k >> 17);
+			k *= 0x1b873593;
+			h ^= k;
+			h = (h << 13) | (h >> 19);
+			h = h * 5 + 0xe6546b64;
+		} while (--i);
+		key = (const uint8_t*) key_x4;
+	}
+	if (len & 3) {
+		size_t i = len & 3;
+		uint32_t k = 0;
+		key = &key[i - 1];
+		do {
+			k <<= 8;
+			k |= *key--;
+		} while (--i);
+		k *= 0xcc9e2d51;
+		k = (k << 15) | (k >> 17);
+		k *= 0x1b873593;
+		h ^= k;
+	}
+	h ^= len;
+	h ^= h >> 16;
+	h *= 0x85ebca6b;
+	h ^= h >> 13;
+	h *= 0xc2b2ae35;
+	h ^= h >> 16;
+	return h;
+}
