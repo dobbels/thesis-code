@@ -8,7 +8,7 @@
   <project EXPORT="discard">[APPS_DIR]/powertracker</project>
   <simulation>
     <title>My simulation</title>
-    <speedlimit>10.0</speedlimit>
+    <speedlimit>1.0</speedlimit>
     <randomseed>123456</randomseed>
     <motedelay_us>1000000</motedelay_us>
     <radiomedium>
@@ -192,7 +192,7 @@
       <viewport>3.651092387757152 0.0 0.0 3.651092387757152 7.84252895915995 -33.834876615117366</viewport>
     </plugin_config>
     <width>400</width>
-    <z>1</z>
+    <z>3</z>
     <height>400</height>
     <location_x>1</location_x>
     <location_y>1</location_y>
@@ -205,7 +205,7 @@
       <coloring />
     </plugin_config>
     <width>1451</width>
-    <z>3</z>
+    <z>1</z>
     <height>240</height>
     <location_x>400</location_x>
     <location_y>160</location_y>

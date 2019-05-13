@@ -918,8 +918,8 @@ static uint8_t
 process_cm_ind_rep(const uint8_t *data,
 		uint16_t datalen) {
 	const char * filename = "properties";
-//	printf("datalen %d == 22?\n", datalen);
-//	printf("Processing HID_CM_IND_REP message\n");
+	printf("datalen %d == 22?\n", datalen);
+	printf("Processing HID_CM_IND_REP message\n");
 
 	// MAC calculation
 	uint8_t for_mac[4];
@@ -931,7 +931,7 @@ process_cm_ind_rep(const uint8_t *data,
 	   cfs_read(fd_read, for_mac + 2, 2);
 	   cfs_close(fd_read);
 	 } else {
-//	   printf("Error: could not read nonce from memory.\n");
+	   printf("Error: could not read nonce from memory.\n");
 	 }
 
 	if(same_mac(data + 18, for_mac, 4)) {
@@ -944,13 +944,13 @@ process_cm_ind_rep(const uint8_t *data,
 		  cfs_read(fd_read, old_key, 16);
 		  cfs_close(fd_read);
 		} else {
-//		  printf("Error: could not read nonce from memory.\n");
+		  printf("Error: could not read nonce from memory.\n");
 		}
 
-//		printf("new_key: \n");
-//		full_print_hex(new_key, 16);
-//		printf("old_key: \n");
-//		full_print_hex(old_key, 16);
+		printf("new_key: \n");
+		full_print_hex(new_key, 16);
+		printf("old_key: \n");
+		full_print_hex(old_key, 16);
 
 		if (is_next_in_chain(old_key, new_key, 16)) {
 			//Get pending subject number for file system and update freshness
@@ -964,15 +964,15 @@ process_cm_ind_rep(const uint8_t *data,
 				set_fresh_information(subject_id, 1);
 				return 1;
 			} else {
-//				printf("Error: could not read subect id from memory.\n");
+				printf("Error: could not read subect id from memory.\n");
 				return 0;
 			}
 		} else {
-//			printf("Error: Not a correct key, therefore subject information is not fresh \n");
+			printf("Error: Not a correct key, therefore subject information is not fresh \n");
 			return 0;
 		}
 	} else {
-//		printf("Incorrect MAC code\n");
+		printf("Incorrect MAC code\n");
 		return 0;
 	}
 }
@@ -1013,11 +1013,11 @@ set_up_hidra_association_with_acs(struct simple_udp_connection *c,
 			//Send message to credential manager
 			simple_udp_sendto(c, response, sizeof(response), sender_addr);
 		} else {
-//			printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
+			printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
 		}
 	}
 	else {
-//		printf("Did not receive from ACS what was expected in the protocol.\n");
+		printf("Did not receive from ACS what was expected in the protocol.\n");
 	}
 	return 1;
 }
