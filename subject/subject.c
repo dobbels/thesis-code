@@ -318,6 +318,12 @@ process_cm_rep(const uint8_t *data,
 		return 0;
 	}
 
+	printf("ticketR: \n");
+	full_print_hex(cm_rep + 2, 26);
+
+	printf("ticketR, bit 8: \n");
+	full_print_hex(cm_rep + 10, 1);
+
 	// Store ticketR
 	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
 	if(fd_write != -1) {
@@ -362,7 +368,13 @@ process_cm_rep(const uint8_t *data,
 		printf("From storage\n");
 		full_print_hex(nonce2, 8);
 		return 0;
+	} else {
+		printf("Correct decryption of Nonce2 in HID_CM_REP.\n");
+		printf("\n");
 	}
+
+	printf("Ksr: \n");
+	full_print_hex(cm_rep + 28, 16);
 
 	// Store Ksr
 	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
@@ -374,6 +386,9 @@ process_cm_rep(const uint8_t *data,
 	} else {
 	  printf("Error: could not write Ksr to storage.\n");
 	}
+
+	printf("nonceSR: \n");
+	full_print_hex(cm_rep + 44, 8);
 
 	// Store Noncesr
 	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
@@ -402,6 +417,12 @@ construct_s_r_req(uint8_t *s_r_req) {
 		printf("Error: could not read ticketR from storage.\n");
 	}
 
+	printf("ticketR: \n");
+	full_print_hex(s_r_req, 26);
+
+	printf("ticketR, bit 8: \n");
+	full_print_hex(s_r_req + 8, 1);
+
 	// Put IDs
 	s_r_req[26] = 0;
 	s_r_req[27] = subject_id;
@@ -415,6 +436,9 @@ construct_s_r_req(uint8_t *s_r_req) {
 	} else {
 		printf("Error: could not read nonceSR from storage.\n");
 	}
+
+	printf("NonceSR: \n");
+	full_print_hex(s_r_req + 28, 8);
 
 	// Generate session key to propose (16 bytes)
 	uint8_t start_of_key = 36;
@@ -465,8 +489,17 @@ construct_s_r_req(uint8_t *s_r_req) {
 		printf("Error: could not read Ksr from storage.\n");
 	}
 
+	printf("Ksr: \n");
+	full_print_hex(k_sr, 16);
+
+	printf("AuthNR before encryption: \n");
+	full_print_hex(s_r_req + 26, 26);
+
 	// Encrypt these 26 bytes (ID + Nonce + Key)
 	xcrypt_ctr(k_sr, s_r_req + 26, 26);
+
+	printf("AuthNR after encryption: \n");
+	full_print_hex(s_r_req + 26, 26);
 
 	// Generate nonce4
 	uint8_t start_of_nonce = 52;
@@ -522,12 +555,8 @@ receiver_acs(struct simple_udp_connection *c,
 				static uint8_t response[47];
 				construct_cm_req(response);
 				//Send message to credential manager
-				uint8_t result = simple_udp_sendto(&unicast_connection_acs, response, sizeof(response), &acs_addr);
-				if (result == 0) {
-					printf("Sent HID_CM_REQ\n");
-				} else {
-					printf("Error: sending HID_CM_REQ\n");
-				}
+				simple_udp_sendto(&unicast_connection_acs, response, sizeof(response), &acs_addr);
+				printf("Sent HID_CM_REQ\n");
 				credentials_requested = 1;
 			} else {
 				printf("Error: wrong subject id %d\n", get_char_from(8, data));
@@ -539,12 +568,8 @@ receiver_acs(struct simple_udp_connection *c,
 				static uint8_t response[60];
 				construct_s_r_req(response);
 				//Send message to credential manager
-				uint8_t result = simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
-				if (result == 0) {
-					printf("Sent HID_S_R_REQ\n");
-				} else {
-					printf("Error: sending HID_S_R_REQ\n");
-				}
+				simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
+				printf("Sent HID_S_R_REQ\n");
 			} else {
 				printf("Error while processing HID_CM_REP\n");
 			}

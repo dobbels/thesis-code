@@ -13,7 +13,7 @@ struct associated_subject {
 	uint8_t fresh_information : 1;
 	uint8_t policy_size; // in bytes. Only uint8_t, because datalen in UDP will never exceed 127 bytes, so uint16_t is not necessary
 	uint8_t *policy;
-	uint8_t *nonce_sr;
+	uint8_t nonce_sr[8];
 	uint8_t session_key[16];
 };
 

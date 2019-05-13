@@ -131,26 +131,6 @@ struct nonce_sr {
    uint8_t content[8];
 };
 
-MEMB(nonces, struct nonce_sr, MAX_NUMBER_OF_SUBJECTS);
-
-struct nonce_sr *
-store_nonce_sr(struct associated_subject * subject, uint8_t *nonce_sr_to_copy)
-{
-	struct nonce_sr * nonce = memb_alloc(&nonces);
-	if(nonce == NULL) {
-		return NULL;
-	}
-	memcpy(nonce->content, nonce_sr_to_copy, 8);
-	subject->nonce_sr = nonce->content;
-	return nonce;
-}
-
-void
-delete_nonce_sr(struct nonce_sr *n)
-{
-	memb_free(&nonces, n);
-}
-
 /*
  * Change policy related to subject with general DENY.
  * If no associated subject exists with subject_id, return failure = 0
@@ -421,10 +401,10 @@ hid_cm_ind_req_success(uint8_t subject_id)
 
 static uint8_t *
 get_session_key(uint8_t subject_id) {
-	struct associated_subject *current_sub;
+
 	int sub_index = 0;
 	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
-		if (current_sub->id == subject_id) {
+		if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
 			return associated_subjects->subject_association_set[sub_index]->session_key;
 		}
 	}
@@ -448,14 +428,38 @@ set_session_key(uint8_t subject_id, uint8_t * key)
 
 static uint8_t *
 get_nonce_sr(uint8_t subject_id) {
-	struct associated_subject *current_sub;
+
+//	printf("subject_id: %d\n", subject_id);
 	int sub_index = 0;
 	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
-		if (current_sub->id == subject_id) {
+		if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
+			printf("associated_subjects->subject_association_set[sub_index]->nonce_sr: \n");
+			full_print_hex(associated_subjects->subject_association_set[sub_index]->nonce_sr, 8);
 			return associated_subjects->subject_association_set[sub_index]->nonce_sr;
 		}
 	}
 	return NULL;
+}
+
+static uint8_t
+set_nonce_sr(uint8_t subject_id, uint8_t *nonce) {
+
+	printf("nonce: \n");
+	full_print_hex(nonce, 8);
+
+//	printf("subject_id: %d\n", subject_id);
+	int sub_index = 0;
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+		if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
+			memcpy(
+					associated_subjects->subject_association_set[sub_index]->nonce_sr,
+					nonce,
+					8
+					);
+			return 1;
+		}
+	}
+	return 0;
 }
 
 static uint8_t
@@ -622,42 +626,71 @@ process_s_r_req(struct simple_udp_connection *c,
 		uint16_t datalen) {
 	const char * filename = "properties";
 //	static uint8_t messaging_buffer[60];
-//	printf("datalen %d == 60?\n", datalen);
+	printf("datalen %d == 60?\n", datalen);
 	memcpy(messaging_buffer, data, 60);
-//	printf("Full HID_S_R_REQ message: \n");
-//	full_print_hex(messaging_buffer, sizeof(messaging_buffer));
+	printf("Full HID_S_R_REQ message: \n");
+	full_print_hex(messaging_buffer, 60);
+
+	printf("of which is encrypted ticketR: \n");
+	full_print_hex(messaging_buffer, 26);
+
+	printf("Encrypted ticketR, bit 8: \n");
+	full_print_hex(messaging_buffer + 8, 1);
 
 	//Decrypt Ticket with resource key
 	xcrypt_ctr(resource_key, messaging_buffer, 26);
+
+	printf("Decrypted ticketR: \n");
+	full_print_hex(messaging_buffer, 26);
+
+	printf("Decrypted ticketR, bit 8: \n");
+	full_print_hex(messaging_buffer + 8, 1);
+
 
 	//Check subject id for association existence and protocol progress
 	uint8_t subject_id = messaging_buffer[17];
 	if (is_already_associated(subject_id) && hid_cm_ind_success(subject_id) && fresh_information(subject_id)) {
 		// Assumption: no access control attributes to check
 
+		static uint8_t ksr[16];
+		memcpy(ksr, messaging_buffer, 16);
+		printf("Ksr: \n");
+		full_print_hex(ksr, 16);
+
+		printf("AuthNR before decryption: \n");
+		full_print_hex(messaging_buffer + 26, 26);
+
 		// Use Ksr to decrypt AuthNr
-		xcrypt_ctr(messaging_buffer, messaging_buffer + 26, 26);
+		xcrypt_ctr(ksr, messaging_buffer + 26, 26);
+
+		printf("AuthNR after decryption: \n");
+		full_print_hex(messaging_buffer + 26, 26);
+
 
 		// Check NonceSR from AuthNr against stored value
 		uint8_t * nonce_sr_from_storage = get_nonce_sr(subject_id);
 		if (nonce_sr_from_storage == NULL) {
-//			printf("Error: retrieving nonceSR");
+			printf("Error: retrieving nonceSR\n");
+			return 0;
 		}
 
+		printf("nonce = messaging_buffer + 28: \n");
+		full_print_hex(messaging_buffer + 28, 8);
+
 		if (memcmp(nonce_sr_from_storage, messaging_buffer + 28, 8) != 0) {
-//			printf("Error: wrong NonceSR in AuthNr.\n");
+			printf("Error: wrong NonceSR in AuthNr.\n");
 			return 0;
 		}
 
 		// Check NonceSR in the ticket against this same value
 		if (memcmp(nonce_sr_from_storage, messaging_buffer + 18, 8) != 0){
-//			printf("Error: wrong NonceSR in ticketR.\n");
+			printf("Error: wrong NonceSR in ticketR.\n");
 			return 0;
 		}
 
 		// Check subject id again
 		if (memcmp(&subject_id, messaging_buffer + 27, 1) != 0) {
-//			printf("Error: wrong subject id in AuthNr.\n");
+			printf("Error: wrong subject id in AuthNr.\n");
 			return 0;
 		}
 
@@ -697,12 +730,13 @@ receiver_subject(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
-//	printf("\nData received from: ");
-//	PRINT6ADDR(sender_addr);
-//	printf("\nAt port %d from port %d with length %d\n",
-//		  receiver_port, sender_port, datalen);
-//	printf("Received data from subject with length %d", datalen);
+	printf("Received data from subject with length %d\n", datalen);
 	// Rough demo separator between access request and key establishment request
+
+//	//Only to test responsiveness, delete later:
+//	if (datalen == 53) {
+//		send_nack(c, sender_addr);
+//	} else
 	if (datalen > 20) {
 		//TODO handle response
 		uint8_t result = process_s_r_req(c, sender_addr, data, datalen);
@@ -719,7 +753,7 @@ receiver_subject(struct simple_udp_connection *c,
 				send_nack(c, sender_addr);
 			}
 		} else {
-//			printf("Request denied, because no association with this subject exists.\n");
+			printf("Request denied, because no association with this subject exists.\n");
 			send_nack(c, sender_addr);
 		}
 	}
@@ -822,20 +856,20 @@ process_cm_ind(uint8_t subject_id,
 		//Ignore lifetime value
 
 		//Store nonce_sr for this subject
-		struct nonce_sr *n =  store_nonce_sr(current_subject, messaging_buffer + 4);
-		if(n == NULL) {
-//			printf("Error in store_nonce_sr()\n");
+		uint8_t n = set_nonce_sr(current_subject->id, messaging_buffer + 4);
+		if(n == 0) {
+			printf("Error in set_nonce_sr()\n");
 		}
 
-		printf("Nonce_sr:\n");
-		full_print_hex(current_subject->nonce_sr, 8);
+//		printf("Nonce_sr:\n");
+//		full_print_hex(current_subject->nonce_sr, 8);
 
 		if (!any_previous_key_chain_value_stored) {
 			any_previous_key_chain_value_stored = 1; //=> on requests from next subjects, to do or not to do?
 			current_subject->fresh_information = 0;
 
 //			printf("Kircm: \n");
-			full_print_hex(messaging_buffer + 13, 16);
+//			full_print_hex(messaging_buffer + 13, 16);
 			//Write this value to file system
 			int fd_write = cfs_open(filename, CFS_WRITE);
 			if(fd_write != -1) {
@@ -907,10 +941,10 @@ process_cm_ind_rep(const uint8_t *data,
 //		  printf("Error: could not read nonce from memory.\n");
 		}
 
-		printf("new_key: \n");
-		full_print_hex(new_key, 16);
-		printf("old_key: \n");
-		full_print_hex(old_key, 16);
+//		printf("new_key: \n");
+//		full_print_hex(new_key, 16);
+//		printf("old_key: \n");
+//		full_print_hex(old_key, 16);
 
 		if (is_next_in_chain(old_key, new_key, 16)) {
 			//Get pending subject number for file system and update freshness
@@ -920,7 +954,7 @@ process_cm_ind_rep(const uint8_t *data,
 				cfs_seek(fd_read, sub_offset, CFS_SEEK_SET);
 				cfs_read(fd_read, &subject_id, 1);
 				cfs_close(fd_read);
-//				printf("Setting freshness of subject %d\n", subject_id);
+				printf("Setting freshness of subject %d\n", subject_id);
 				set_fresh_information(subject_id, 1);
 				return 1;
 			} else {
@@ -1181,7 +1215,7 @@ void test_1(void)
         		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
 //        		{0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x31, 0x30, 0x31, 0x31, 0x31, 0x32, 0x31};
 
-        full_print_hex(key, 16);
+//        full_print_hex(key, 16);
 
         struct tc_hmac_state_struct h;
 
@@ -1194,7 +1228,7 @@ void test_1(void)
 		(void)tc_hmac_update(&h, data, 16);
 		(void)tc_hmac_final(digest, TC_SHA256_DIGEST_SIZE, &h);
 
-		full_print_hex(digest, TC_SHA256_DIGEST_SIZE);
+//		full_print_hex(digest, TC_SHA256_DIGEST_SIZE);
 }
 
 PROCESS_THREAD(hidra_r, ev, data)
@@ -1236,7 +1270,7 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 {
-	uint8_t iv[16]  = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
+	static uint8_t iv[16]  = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
 	struct AES_ctx ctx;
 
 	AES_init_ctx_iv(&ctx, key, iv);
@@ -1778,7 +1812,7 @@ same_mac(const uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_
 	memcpy(array_with_key, resource_key, 16);
 	memcpy(array_with_key + 16, array_to_check, length_in_bytes);
 //	printf("Array before hash: \n");
-	full_print_hex(array_with_key, length_in_bytes + 16);
+//	full_print_hex(array_with_key, length_in_bytes + 16);
 //	printf("Length: %d\n", sizeof(array_with_key));
 	//Differences between murmur3 implementations => always take the first 20 bytes as a comparison for now.
 	uint32_t hashed = murmur3_32(array_with_key, 20, 17);

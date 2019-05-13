@@ -14,21 +14,24 @@
 // These vars will contain the hash
 uint32_t h0, h1, h2, h3;
 
+/*
+ * WARNING: might be adapted to only fit 16 byte keys. Not a general md5 anymore. See source for that.
+ */
 uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_len) {
 
-
+	printf("Check one-way chain.\n");
 
     // Note: All variables are unsigned 32 bit and wrap modulo 2^32 when calculating
 
     // r specifies the per-round shift amounts
 
-    uint32_t r[] = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    static uint32_t r[] = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
                     5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20,
                     4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
                     6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21};
 
     // Use binary integer part of the sines of integers (in radians) as constants// Initialize variables:
-    uint32_t k[] = {
+    static uint32_t k[] = {
         0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
         0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
         0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
@@ -64,8 +67,11 @@ uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_le
     for(new_len = initial_len*8 + 1; new_len%512!=448; new_len++);
     new_len /= 8;
 
+//    printf("new_len 56 == %d\n", new_len);
+
     // Message (to prepare)
-	uint8_t msg[new_len+64];
+    static uint8_t msg[56+64]; //WARNING: new_len == 56 for lengths up to 50 ?
+//	uint8_t msg[new_len+64];
     memset(msg,0,new_len + 64);
 
     memcpy(msg, initial_msg, initial_len);
@@ -91,25 +97,6 @@ uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_le
         // Main loop:
         uint32_t i;
         for(i = 0; i<64; i++) {
-
-#ifdef ROUNDS
-            uint8_t *p;
-            printf("%i: ", i);
-            p=(uint8_t *)&a;
-            printf("%2.2x%2.2x%2.2x%2.2x ", p[0], p[1], p[2], p[3], a);
-
-            p=(uint8_t *)&b;
-            printf("%2.2x%2.2x%2.2x%2.2x ", p[0], p[1], p[2], p[3], b);
-
-            p=(uint8_t *)&c;
-            printf("%2.2x%2.2x%2.2x%2.2x ", p[0], p[1], p[2], p[3], c);
-
-            p=(uint8_t *)&d;
-            printf("%2.2x%2.2x%2.2x%2.2x", p[0], p[1], p[2], p[3], d);
-            puts("");
-#endif
-
-
             uint32_t f, g;
 
              if (i < 16) {
@@ -126,9 +113,6 @@ uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_le
                 g = (7*i) % 16;
             }
 
-#ifdef ROUNDS
-            printf("f=%x g=%d w[g]=%x\n", f, g, w[g]);
-#endif
             uint32_t temp = d;
             d = c;
             c = b;
@@ -153,7 +137,7 @@ uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_le
 	uint8_t *p;
 
 	p=(uint8_t *)&h0;
-    int i = 0;
+
 	if (0 != memcmp((uint8_t *) next, (uint8_t *) p, 4)) {
 		printf("1: %2.2x%2.2x%2.2x%2.2x\n", p[0], p[1], p[2], p[3]);
 		return 0;
