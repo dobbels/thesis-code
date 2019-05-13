@@ -31,7 +31,7 @@ static struct simple_udp_connection unicast_connection_acs;
 static struct simple_udp_connection unicast_connection_resource;
 
 uip_ipaddr_t resource_addr;
-uip_ipaddr_t acs_addr;
+uip_ipaddr_t server_addr;
 
 uint8_t subject_key[16] =
 	{ (uint8_t) 0x7e, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x16,
@@ -55,7 +55,7 @@ set_resource_address(void)
 static void
 set_acs_address(void)
 {
-	uip_ip6addr(&acs_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0x1);
+	uip_ip6addr(&server_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0x1);
 }
 
 static uip_ipaddr_t *

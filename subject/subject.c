@@ -16,7 +16,7 @@
 #define DEBUG DEBUG_PRINT
 #include "net/ip/uip-debug.h"
 
-#define ACS_UDP_PORT 4321
+#define SERVER_UDP_PORT 4321
 #define RESOURCE_UDP_PORT 1996
 
 //#define ID 3
@@ -27,11 +27,11 @@ static uint8_t credentials_requested = 0;
 static uint8_t resource_access_requested = 0;
 static uint8_t security_association_established = 0;
 
-static struct simple_udp_connection unicast_connection_acs;
+static struct simple_udp_connection unicast_connection_server;
 static struct simple_udp_connection unicast_connection_resource;
 
 uip_ipaddr_t resource_addr;
-uip_ipaddr_t acs_addr;
+uip_ipaddr_t server_addr;
 
 uint8_t subject_key[16] =
 	{ (uint8_t) 0x7e, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x16,
@@ -523,7 +523,7 @@ construct_s_r_req(uint8_t *s_r_req) {
 }
 
 static void
-receiver_acs(struct simple_udp_connection *c,
+receiver_server(struct simple_udp_connection *c,
          const uip_ipaddr_t *sender_addr,
          uint16_t sender_port,
          const uip_ipaddr_t *receiver_addr,
@@ -549,7 +549,7 @@ receiver_acs(struct simple_udp_connection *c,
 				static uint8_t response[47];
 				construct_cm_req(response);
 				//Send message to credential manager
-				simple_udp_sendto(&unicast_connection_acs, response, sizeof(response), &acs_addr);
+				simple_udp_sendto(&unicast_connection_server, response, sizeof(response), &server_addr);
 				printf("Sent HID_CM_REQ\n");
 				credentials_requested = 1;
 			} else {
@@ -604,7 +604,7 @@ start_hidra_protocol(void) {
 	printf("ANS request message: \n");
 	full_print_hex(ans_request,15);
 
-	simple_udp_sendto(&unicast_connection_acs, ans_request, sizeof(ans_request), &acs_addr);
+	simple_udp_sendto(&unicast_connection_server, ans_request, sizeof(ans_request), &server_addr);
 	authentication_requested = 1;
 }
 
@@ -661,9 +661,9 @@ set_resource_address(void)
 }
 
 static void
-set_acs_address(void)
+set_server_address(void)
 {
-	uip_ip6addr(&acs_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0x1);
+	uip_ip6addr(&server_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0x1);
 }
 
 static uip_ipaddr_t *
@@ -772,14 +772,17 @@ PROCESS_THREAD(hidra_subject, ev, data)
 
 	//use global address to deduce node-id
 	subject_id = set_global_address()->u8[15];
+	//use subject id to customize key
+	subject_key[15] = subject_id;
+
 	set_resource_address();
-	set_acs_address();
+	set_server_address();
 
 //	test_file_operations();
 
-	simple_udp_register(&unicast_connection_acs, ACS_UDP_PORT,
-						  NULL, ACS_UDP_PORT,
-						  receiver_acs);
+	simple_udp_register(&unicast_connection_server, SERVER_UDP_PORT,
+						  NULL, SERVER_UDP_PORT,
+						  receiver_server);
 
 	simple_udp_register(&unicast_connection_resource, RESOURCE_UDP_PORT,
 						  NULL, RESOURCE_UDP_PORT,

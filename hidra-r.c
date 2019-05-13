@@ -16,10 +16,10 @@
 
 #include "tiny-AES-c/aes.h"
 
-#include "tinycrypt/lib/include/tinycrypt/hmac.h"
-#include "tinycrypt/lib/include/tinycrypt/sha256.h"
-#include "tinycrypt/lib/include/tinycrypt/constants.h"
-#include "tinycrypt/lib/include/tinycrypt/utils.h"
+//#include "tinycrypt/lib/include/tinycrypt/hmac.h"
+//#include "tinycrypt/lib/include/tinycrypt/sha256.h"
+//#include "tinycrypt/lib/include/tinycrypt/constants.h"
+//#include "tinycrypt/lib/include/tinycrypt/utils.h"
 //#include "tinycrypt/tests/include/test_utils.h"
 
 //#include "sha.h"
@@ -45,15 +45,16 @@
 
 //#include "hmac-sha1.h"
 
-#define ACS_UDP_PORT 1234
+#define SERVER_UDP_PORT 1234
 #define SUBJECT_UDP_PORT 1996
 
 #define MAX_NUMBER_OF_SUBJECTS 3
 
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
 uint8_t same_mac(const uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes);
+void hmac_md5(const uint8_t key[16], const uint8_t *data, int data_len, uint8_t* digest);
 
-static struct simple_udp_connection unicast_connection_acs;
+static struct simple_udp_connection unicast_connection_server;
 static struct simple_udp_connection unicast_connection_subject;
 
 uip_ipaddr_t resource_addr;
@@ -183,13 +184,13 @@ struct reference_table {
 
 static uint8_t
 low_battery() {
-//	printf("Checking battery level.\n");
+	printf("Checking battery level.\n");
 	return (battery_level <= 50);
 }
 
 static uint8_t
 log_request() {
-//	printf("Logging, i.e. incrementing nb_of_access_requests_made.\n");
+	printf("Logging, i.e. incrementing nb_of_access_requests_made.\n");
 	nb_of_access_requests_made++;
 	return (0);
 }
@@ -201,12 +202,6 @@ switch_light_on() {
 	return (0);
 }
 
-//static uint8_t
-//switch_light_off() {
-//	leds_off(LEDS_ALL);
-//	return (0);
-//}
-
 static void
 initialize_reference_table()
 {
@@ -216,8 +211,6 @@ initialize_reference_table()
 	reference_table.references[1].function_pointer = &log_request;
 	reference_table.references[2].id = 18;
 	reference_table.references[2].function_pointer = &switch_light_on;
-//	reference_table.references[3].id = 19;
-//	reference_table.references[3].function_pointer = &switch_light_off;
 }
 
 static struct reference *
@@ -977,7 +970,7 @@ process_cm_ind_rep(const uint8_t *data,
 }
 
 static uint8_t
-set_up_hidra_association_with_acs(struct simple_udp_connection *c,
+set_up_hidra_association_with_server(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
         uint16_t datalen)
@@ -1053,7 +1046,7 @@ handle_policy_update(struct simple_udp_connection *c,
 }
 
 static void
-receiver_acs(struct simple_udp_connection *c,
+receiver_server(struct simple_udp_connection *c,
          const uip_ipaddr_t *sender_addr,
          uint16_t sender_port,
          const uip_ipaddr_t *receiver_addr,
@@ -1074,7 +1067,7 @@ receiver_acs(struct simple_udp_connection *c,
 //		  printf("Trying to update a policy of a non-associated subject. \n");
 	  }
   } else {
-	  set_up_hidra_association_with_acs(c, sender_addr, data+1, datalen-1);
+	  set_up_hidra_association_with_server(c, sender_addr, data+1, datalen-1);
   }
 }
 
@@ -1186,55 +1179,6 @@ set_global_address(void)
 
 ///////////////////
 
-void test_1(void)
-{
-		printf("Testing hmac\n");
-        unsigned int result = 1;
-
-        static const uint8_t data[43] =
-        	{
-        			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
-        			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
-        			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd
-        	};
-
-//        static const uint8_t data[43] =
-//               	{
-//               			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
-//               			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
-//               			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd
-//               	};
-
-//        static const uint8_t data[39] =
-//                	{
-//                			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
-//                			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
-//                			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c
-//                	};
-
-//        static const uint8_t data[10] = {0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x68, 0x65, 0x6c, 0x6c, 0x6f};
-
-        const uint8_t key[16] = { (uint8_t) 0x2b, (uint8_t) 0x7e, (uint8_t) 0x15, (uint8_t) 0x16,
-        		(uint8_t) 0x28, (uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x2b,
-        		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
-        		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
-//        		{0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x31, 0x30, 0x31, 0x31, 0x31, 0x32, 0x31};
-
-        full_print_hex(key, 16);
-
-        static struct tc_hmac_state_struct h;
-
-        (void)memset(&h, 0x00, sizeof(h));
-        (void)tc_hmac_set_key(&h, key, sizeof(key));
-
-        uint8_t digest[32];
-
-		(void)tc_hmac_init(&h);
-		(void)tc_hmac_update(&h, data, 16);
-		(void)tc_hmac_final(digest, TC_SHA256_DIGEST_SIZE, &h);
-
-		full_print_hex(digest, TC_SHA256_DIGEST_SIZE);
-}
 
 PROCESS_THREAD(hidra_r, ev, data)
 {
@@ -1246,9 +1190,9 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 	// Register a sockets, with the correct host and remote ports
 	// NULL parameter as the destination address to allow packets from any address. (fixed IPv6 address can be given)
-	simple_udp_register(&unicast_connection_acs, ACS_UDP_PORT,
-						  NULL, ACS_UDP_PORT,
-						  receiver_acs);
+	simple_udp_register(&unicast_connection_server, SERVER_UDP_PORT,
+						  NULL, SERVER_UDP_PORT,
+						  receiver_server);
 	int result = simple_udp_register(&unicast_connection_subject, SUBJECT_UDP_PORT,
 							  NULL, SUBJECT_UDP_PORT,
 							  receiver_subject);
@@ -1261,19 +1205,25 @@ PROCESS_THREAD(hidra_r, ev, data)
 
 //	test_hmac_sha2();
 
-//	test_1();
 
-	static const uint8_t data[43] =
-	        	{
-	        			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
-	        			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
-	        			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd
-	        	};
+//	static const uint8_t data[43] =
+//	        	{
+//	        			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
+//	        			0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c,
+//	        			0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd
+//	        	};
 
-	uint8_t digest[16];
-	hmac_md5(resource_key, data, 43, digest);
-
-	full_print_hex(digest, 16);
+//	static const uint8_t data[8] =
+//	        	{
+//	        			0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65
+//	        	};
+//
+//
+//	uint8_t digest[16];
+//	memset(digest, 0, 16);
+//	hmac_md5(resource_key, data, sizeof(data), digest);
+//
+//	full_print_hex(digest, 16);
 
 	static int loop_counter = 0;
 	while(1) {
@@ -1890,437 +1840,6 @@ uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 	return h;
 }
 
-
-////?TINY HMAC + TINY SHA256?////
-/* utils.c - TinyCrypt platform-dependent run-time operations */
-
-/*
- *  Copyright (C) 2017 by Intel Corporation, All Rights Reserved.
- *
- *  Redistribution and use in source and binary forms, with or without
- *  modification, are permitted provided that the following conditions are met:
- *
- *    - Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *
- *    - Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- *    - Neither the name of Intel Corporation nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
- *
- *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- *  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- *  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- *  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- *  POSSIBILITY OF SUCH DAMAGE.
- */
-
-#define MASK_TWENTY_SEVEN 0x1b
-
-unsigned int _copy(uint8_t *to, unsigned int to_len,
-		   const uint8_t *from, unsigned int from_len)
-{
-	if (from_len <= to_len) {
-		(void)memcpy(to, from, from_len);
-		return from_len;
-	} else {
-		return TC_CRYPTO_FAIL;
-	}
-}
-
-void _set(void *to, uint8_t val, unsigned int len)
-{
-	(void)memset(to, val, len);
-}
-
-/*
- * Doubles the value of a byte for values up to 127.
- */
-uint8_t _double_byte(uint8_t a)
-{
-	return ((a<<1) ^ ((a>>7) * MASK_TWENTY_SEVEN));
-}
-
-//int _compare(const uint8_t *a, const uint8_t *b, size_t size)
-//{
-//	const uint8_t *tempa = a;
-//	const uint8_t *tempb = b;
-//	uint8_t result = 0;
-//
-//	for (unsigned int i = 0; i < size; i++) {
-//		result |= tempa[i] ^ tempb[i];
-//	}
-//	return result;
-//}
-
-/* hmac.c - TinyCrypt implementation of the HMAC algorithm */
-
-/*
- *  Copyright (C) 2017 by Intel Corporation, All Rights Reserved.
- *
- *  Redistribution and use in source and binary forms, with or without
- *  modification, are permitted provided that the following conditions are met:
- *
- *    - Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *
- *    - Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- *    - Neither the name of Intel Corporation nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
- *
- *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- *  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- *  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- *  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- *  POSSIBILITY OF SUCH DAMAGE.
- */
-
-static void rekey(uint8_t *key, const uint8_t *new_key, unsigned int key_size)
-{
-	const uint8_t inner_pad = (uint8_t) 0x36;
-	const uint8_t outer_pad = (uint8_t) 0x5c;
-	unsigned int i;
-
-	for (i = 0; i < key_size; ++i) {
-		key[i] = inner_pad ^ new_key[i];
-		key[i + TC_SHA256_BLOCK_SIZE] = outer_pad ^ new_key[i];
-	}
-	for (; i < TC_SHA256_BLOCK_SIZE; ++i) {
-		key[i] = inner_pad; key[i + TC_SHA256_BLOCK_SIZE] = outer_pad;
-	}
-}
-
-int tc_hmac_set_key(TCHmacState_t ctx, const uint8_t *key,
-		    unsigned int key_size)
-{
-	/* Input sanity check */
-	if (ctx == (TCHmacState_t) 0 ||
-	    key == (const uint8_t *) 0 ||
-	    key_size == 0) {
-		return TC_CRYPTO_FAIL;
-	}
-
-	static const uint8_t dummy_key[TC_SHA256_BLOCK_SIZE];
-	struct tc_hmac_state_struct dummy_state;
-
-	if (key_size <= TC_SHA256_BLOCK_SIZE) {
-		/*
-		 * The next three calls are dummy calls just to avoid
-		 * certain timing attacks. Without these dummy calls,
-		 * adversaries would be able to learn whether the key_size is
-		 * greater than TC_SHA256_BLOCK_SIZE by measuring the time
-		 * consumed in this process.
-		 */
-		(void)tc_sha256_init(&dummy_state.hash_state);
-		(void)tc_sha256_update(&dummy_state.hash_state,
-				       dummy_key,
-				       key_size);
-		(void)tc_sha256_final(&dummy_state.key[TC_SHA256_DIGEST_SIZE],
-				      &dummy_state.hash_state);
-
-		/* Actual code for when key_size <= TC_SHA256_BLOCK_SIZE: */
-		rekey(ctx->key, key, key_size);
-	} else {
-		(void)tc_sha256_init(&ctx->hash_state);
-		(void)tc_sha256_update(&ctx->hash_state, key, key_size);
-		(void)tc_sha256_final(&ctx->key[TC_SHA256_DIGEST_SIZE],
-				      &ctx->hash_state);
-		rekey(ctx->key,
-		      &ctx->key[TC_SHA256_DIGEST_SIZE],
-		      TC_SHA256_DIGEST_SIZE);
-	}
-
-	return TC_CRYPTO_SUCCESS;
-}
-
-int tc_hmac_init(TCHmacState_t ctx)
-{
-
-	/* input sanity check: */
-	if (ctx == (TCHmacState_t) 0) {
-		return TC_CRYPTO_FAIL;
-	}
-
-  (void) tc_sha256_init(&ctx->hash_state);
-  (void) tc_sha256_update(&ctx->hash_state, ctx->key, TC_SHA256_BLOCK_SIZE);
-
-	return TC_CRYPTO_SUCCESS;
-}
-
-int tc_hmac_update(TCHmacState_t ctx,
-		   const void *data,
-		   unsigned int data_length)
-{
-
-	/* input sanity check: */
-	if (ctx == (TCHmacState_t) 0) {
-		return TC_CRYPTO_FAIL;
-	}
-
-	(void)tc_sha256_update(&ctx->hash_state, data, data_length);
-
-	return TC_CRYPTO_SUCCESS;
-}
-
-int tc_hmac_final(uint8_t *tag, unsigned int taglen, TCHmacState_t ctx)
-{
-
-	/* input sanity check: */
-	if (tag == (uint8_t *) 0 ||
-	    taglen != TC_SHA256_DIGEST_SIZE ||
-	    ctx == (TCHmacState_t) 0) {
-		return TC_CRYPTO_FAIL;
-	}
-
-	(void) tc_sha256_final(tag, &ctx->hash_state);
-
-	(void)tc_sha256_init(&ctx->hash_state);
-	(void)tc_sha256_update(&ctx->hash_state,
-			       &ctx->key[TC_SHA256_BLOCK_SIZE],
-				TC_SHA256_BLOCK_SIZE);
-	(void)tc_sha256_update(&ctx->hash_state, tag, TC_SHA256_DIGEST_SIZE);
-	(void)tc_sha256_final(tag, &ctx->hash_state);
-
-	/* destroy the current state */
-	_set(ctx, 0, sizeof(*ctx));
-
-	return TC_CRYPTO_SUCCESS;
-}
-
-
-/* sha256.c - TinyCrypt SHA-256 crypto hash algorithm implementation */
-
-/*
- *  Copyright (C) 2017 by Intel Corporation, All Rights Reserved.
- *
- *  Redistribution and use in source and binary forms, with or without
- *  modification, are permitted provided that the following conditions are met:
- *
- *    - Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *
- *    - Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- *    - Neither the name of Intel Corporation nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
- *
- *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- *  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- *  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- *  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- *  POSSIBILITY OF SUCH DAMAGE.
- */
-
-static void compress(unsigned int *iv, const uint8_t *data);
-
-int tc_sha256_init(TCSha256State_t s)
-{
-	/* input sanity check: */
-	if (s == (TCSha256State_t) 0) {
-		return TC_CRYPTO_FAIL;
-	}
-
-	/*
-	 * Setting the initial state values.
-	 * These values correspond to the first 32 bits of the fractional parts
-	 * of the square roots of the first 8 primes: 2, 3, 5, 7, 11, 13, 17
-	 * and 19.
-	 */
-	_set((uint8_t *) s, 0x00, sizeof(*s));
-	s->iv[0] = 0x6a09e667;
-	s->iv[1] = 0xbb67ae85;
-	s->iv[2] = 0x3c6ef372;
-	s->iv[3] = 0xa54ff53a;
-	s->iv[4] = 0x510e527f;
-	s->iv[5] = 0x9b05688c;
-	s->iv[6] = 0x1f83d9ab;
-	s->iv[7] = 0x5be0cd19;
-
-	return TC_CRYPTO_SUCCESS;
-}
-
-int tc_sha256_update(TCSha256State_t s, const uint8_t *data, size_t datalen)
-{
-	/* input sanity check: */
-	if (s == (TCSha256State_t) 0 ||
-	    data == (void *) 0) {
-		return TC_CRYPTO_FAIL;
-	} else if (datalen == 0) {
-		return TC_CRYPTO_SUCCESS;
-	}
-
-	while (datalen-- > 0) {
-		s->leftover[s->leftover_offset++] = *(data++);
-		if (s->leftover_offset >= TC_SHA256_BLOCK_SIZE) {
-			compress(s->iv, s->leftover);
-			s->leftover_offset = 0;
-			s->bits_hashed += (TC_SHA256_BLOCK_SIZE << 3);
-		}
-	}
-
-	return TC_CRYPTO_SUCCESS;
-}
-
-int tc_sha256_final(uint8_t *digest, TCSha256State_t s)
-{
-	unsigned int i;
-
-	/* input sanity check: */
-	if (digest == (uint8_t *) 0 ||
-	    s == (TCSha256State_t) 0) {
-		return TC_CRYPTO_FAIL;
-	}
-
-	s->bits_hashed += (s->leftover_offset << 3);
-
-	s->leftover[s->leftover_offset++] = 0x80; /* always room for one byte */
-	if (s->leftover_offset > (sizeof(s->leftover) - 8)) {
-		/* there is not room for all the padding in this block */
-		_set(s->leftover + s->leftover_offset, 0x00,
-		     sizeof(s->leftover) - s->leftover_offset);
-		compress(s->iv, s->leftover);
-		s->leftover_offset = 0;
-	}
-
-	/* add the padding and the length in big-Endian format */
-	_set(s->leftover + s->leftover_offset, 0x00,
-	     sizeof(s->leftover) - 8 - s->leftover_offset);
-	s->leftover[sizeof(s->leftover) - 1] = (uint8_t)(s->bits_hashed);
-	s->leftover[sizeof(s->leftover) - 2] = (uint8_t)(s->bits_hashed >> 8);
-	s->leftover[sizeof(s->leftover) - 3] = (uint8_t)(s->bits_hashed >> 16);
-	s->leftover[sizeof(s->leftover) - 4] = (uint8_t)(s->bits_hashed >> 24);
-	s->leftover[sizeof(s->leftover) - 5] = (uint8_t)(s->bits_hashed >> 32);
-	s->leftover[sizeof(s->leftover) - 6] = (uint8_t)(s->bits_hashed >> 40);
-	s->leftover[sizeof(s->leftover) - 7] = (uint8_t)(s->bits_hashed >> 48);
-	s->leftover[sizeof(s->leftover) - 8] = (uint8_t)(s->bits_hashed >> 56);
-
-	/* hash the padding and length */
-	compress(s->iv, s->leftover);
-
-	/* copy the iv out to digest */
-	for (i = 0; i < TC_SHA256_STATE_BLOCKS; ++i) {
-		unsigned int t = *((unsigned int *) &s->iv[i]);
-		*digest++ = (uint8_t)(t >> 24);
-		*digest++ = (uint8_t)(t >> 16);
-		*digest++ = (uint8_t)(t >> 8);
-		*digest++ = (uint8_t)(t);
-	}
-
-	/* destroy the current state */
-	_set(s, 0, sizeof(*s));
-
-	return TC_CRYPTO_SUCCESS;
-}
-
-/*
- * Initializing SHA-256 Hash constant words K.
- * These values correspond to the first 32 bits of the fractional parts of the
- * cube roots of the first 64 primes between 2 and 311.
- */
-static const unsigned int k256[64] = {
-	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
-	0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-	0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
-	0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-	0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
-	0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-	0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-	0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
-	0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-	0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-};
-
-static inline unsigned int ROTR(unsigned int a, unsigned int n)
-{
-	return (((a) >> n) | ((a) << (32 - n)));
-}
-
-#define Sigma0(a)(ROTR((a), 2) ^ ROTR((a), 13) ^ ROTR((a), 22))
-#define Sigma1(a)(ROTR((a), 6) ^ ROTR((a), 11) ^ ROTR((a), 25))
-#define sigma0(a)(ROTR((a), 7) ^ ROTR((a), 18) ^ ((a) >> 3))
-#define sigma1(a)(ROTR((a), 17) ^ ROTR((a), 19) ^ ((a) >> 10))
-
-#define Ch(a, b, c)(((a) & (b)) ^ ((~(a)) & (c)))
-#define Maj(a, b, c)(((a) & (b)) ^ ((a) & (c)) ^ ((b) & (c)))
-
-static inline unsigned int BigEndian(const uint8_t **c)
-{
-	unsigned int n = 0;
-
-	n = (((unsigned int)(*((*c)++))) << 24);
-	n |= ((unsigned int)(*((*c)++)) << 16);
-	n |= ((unsigned int)(*((*c)++)) << 8);
-	n |= ((unsigned int)(*((*c)++)));
-	return n;
-}
-
-static void compress(unsigned int *iv, const uint8_t *data)
-{
-	unsigned int a, b, c, d, e, f, g, h;
-	unsigned int s0, s1;
-	unsigned int t1, t2;
-	unsigned int work_space[16];
-	unsigned int n;
-	unsigned int i;
-
-	a = iv[0]; b = iv[1]; c = iv[2]; d = iv[3];
-	e = iv[4]; f = iv[5]; g = iv[6]; h = iv[7];
-
-	for (i = 0; i < 16; ++i) {
-		n = BigEndian(&data);
-		t1 = work_space[i] = n;
-		t1 += h + Sigma1(e) + Ch(e, f, g) + k256[i];
-		t2 = Sigma0(a) + Maj(a, b, c);
-		h = g; g = f; f = e; e = d + t1;
-		d = c; c = b; b = a; a = t1 + t2;
-	}
-
-	for ( ; i < 64; ++i) {
-		s0 = work_space[(i+1)&0x0f];
-		s0 = sigma0(s0);
-		s1 = work_space[(i+14)&0x0f];
-		s1 = sigma1(s1);
-
-		t1 = work_space[i&0xf] += s0 + s1 + work_space[(i+9)&0xf];
-		t1 += h + Sigma1(e) + Ch(e, f, g) + k256[i];
-		t2 = Sigma0(a) + Maj(a, b, c);
-		h = g; g = f; f = e; e = d + t1;
-		d = c; c = b; b = a; a = t1 + t2;
-	}
-
-	iv[0] += a; iv[1] += b; iv[2] += c; iv[3] += d;
-	iv[4] += e; iv[5] += f; iv[6] += g; iv[7] += h;
-}
-
 //////////////////HMAC MD5
 
 //Source: https://download.samba.org/pub/unpacked/junkcode/lsakey/
@@ -2357,13 +1876,9 @@ static void compress(unsigned int *iv, const uint8_t *data)
 //#include <unistd.h>
 //#include <fcntl.h>
 
-typedef unsigned int uint32;
-typedef unsigned char uchar;
-typedef unsigned char uint8_t;
-
 struct MD5Context {
-	uint32 buf[4];
-	uint32 bits[2];
+	uint32_t buf[4];
+	uint32_t bits[2];
 	unsigned char in[64];
 };
 
@@ -2382,33 +1897,33 @@ typedef struct MD5Context MD5_CTX;
 typedef struct
 {
         struct MD5Context ctx;
-        uchar k_ipad[65];
-        uchar k_opad[65];
+        uint8_t k_ipad[65];
+        uint8_t k_opad[65];
 
 } HMACMD5Context;
 
-void hmac_md5_init_rfc2104(const uchar*  key, int key_len, HMACMD5Context *ctx);
-void hmac_md5_init_limK_to_64(const uchar* key, int key_len,HMACMD5Context *ctx);
-void hmac_md5_update(const uchar* text, int text_len, HMACMD5Context *ctx);
-void hmac_md5_final(uchar *digest, HMACMD5Context *ctx);
+void hmac_md5_init_rfc2104(const uint8_t*  key, int key_len, HMACMD5Context *ctx);
+void hmac_md5_init_limK_to_64(const uint8_t* key, int key_len,HMACMD5Context *ctx);
+void hmac_md5_update(const uint8_t* text, int text_len, HMACMD5Context *ctx);
+void hmac_md5_final(uint8_t *digest, HMACMD5Context *ctx);
 
-void arcfour(uint8_t *data, int len, const uchar *key, int key_len);
+void arcfour(uint8_t *data, int len, const uint8_t *key, int key_len);
 
 void cred_hash2(uint8_t *out, const uint8_t *in, const uint8_t *key, int forw);
 void des_crypt56(uint8_t *out, const uint8_t *in, const uint8_t *key, int forw);
 
-static void MD5Transform(uint32 buf[4], uint32 const in[16]);
+static void MD5Transform(uint32_t buf[4], uint32_t const in[16]);
 
 /*
  * Note: this code is harmless on little-endian machines.
  */
 static void byteReverse(unsigned char *buf, unsigned longs)
 {
-    uint32 t;
+    uint32_t t;
     do {
-	t = (uint32) ((unsigned) buf[3] << 8 | buf[2]) << 16 |
+	t = (uint32_t) ((unsigned) buf[3] << 8 | buf[2]) << 16 |
 	    ((unsigned) buf[1] << 8 | buf[0]);
-	*(uint32 *) buf = t;
+	*(uint32_t *) buf = t;
 	buf += 4;
     } while (--longs);
 }
@@ -2434,12 +1949,12 @@ void MD5Init(struct MD5Context *ctx)
  */
 void MD5Update(struct MD5Context *ctx, unsigned char const *buf, unsigned len)
 {
-    register uint32 t;
+    register uint32_t t;
 
     /* Update bitcount */
 
     t = ctx->bits[0];
-    if ((ctx->bits[0] = t + ((uint32) len << 3)) < t)
+    if ((ctx->bits[0] = t + ((uint32_t) len << 3)) < t)
 	ctx->bits[1]++;		/* Carry from low to high */
     ctx->bits[1] += len >> 29;
 
@@ -2457,7 +1972,7 @@ void MD5Update(struct MD5Context *ctx, unsigned char const *buf, unsigned len)
 	}
 	memmove(p, buf, t);
 	byteReverse(ctx->in, 16);
-	MD5Transform(ctx->buf, (uint32 *) ctx->in);
+	MD5Transform(ctx->buf, (uint32_t *) ctx->in);
 	buf += t;
 	len -= t;
     }
@@ -2466,7 +1981,7 @@ void MD5Update(struct MD5Context *ctx, unsigned char const *buf, unsigned len)
     while (len >= 64) {
 	memmove(ctx->in, buf, 64);
 	byteReverse(ctx->in, 16);
-	MD5Transform(ctx->buf, (uint32 *) ctx->in);
+	MD5Transform(ctx->buf, (uint32_t *) ctx->in);
 	buf += 64;
 	len -= 64;
     }
@@ -2501,7 +2016,7 @@ void MD5Final(unsigned char digest[16], struct MD5Context *ctx)
 	/* Two lots of padding:  Pad the first block to 64 bytes */
 	memset(p, 0, count);
 	byteReverse(ctx->in, 16);
-	MD5Transform(ctx->buf, (uint32 *) ctx->in);
+	MD5Transform(ctx->buf, (uint32_t *) ctx->in);
 
 	/* Now fill the next block with 56 bytes */
 	memset(ctx->in, 0, 56);
@@ -2512,10 +2027,10 @@ void MD5Final(unsigned char digest[16], struct MD5Context *ctx)
     byteReverse(ctx->in, 14);
 
     /* Append length in bits and transform */
-    ((uint32 *) ctx->in)[14] = ctx->bits[0];
-    ((uint32 *) ctx->in)[15] = ctx->bits[1];
+    ((uint32_t *) ctx->in)[14] = ctx->bits[0];
+    ((uint32_t *) ctx->in)[15] = ctx->bits[1];
 
-    MD5Transform(ctx->buf, (uint32 *) ctx->in);
+    MD5Transform(ctx->buf, (uint32_t *) ctx->in);
     byteReverse((unsigned char *) ctx->buf, 4);
     memmove(digest, ctx->buf, 16);
     memset(ctx, 0, sizeof(ctx));	/* In case it's sensitive */
@@ -2538,9 +2053,9 @@ void MD5Final(unsigned char digest[16], struct MD5Context *ctx)
  * reflect the addition of 16 longwords of new data.  MD5Update blocks
  * the data and converts bytes into longwords for this routine.
  */
-static void MD5Transform(uint32 buf[4], uint32 const in[16])
+static void MD5Transform(uint32_t buf[4], uint32_t const in[16])
 {
-    register uint32 a, b, c, d;
+    register uint32_t a, b, c, d;
 
     a = buf[0];
     b = buf[1];
@@ -2623,14 +2138,14 @@ static void MD5Transform(uint32 buf[4], uint32 const in[16])
 /***********************************************************************
  the rfc 2104 version of hmac_md5 initialisation.
 ***********************************************************************/
-void hmac_md5_init_rfc2104(const uchar*  key, int key_len, HMACMD5Context *ctx)
+void hmac_md5_init_rfc2104(const uint8_t*  key, int key_len, HMACMD5Context *ctx)
 {
         int i;
 
         /* if key is longer than 64 bytes reset it to key=MD5(key) */
         if (key_len > 64)
 	{
-		uchar tk[16];
+		uint8_t tk[16];
                 struct MD5Context tctx;
 
                 MD5Init(&tctx);
@@ -2661,7 +2176,7 @@ void hmac_md5_init_rfc2104(const uchar*  key, int key_len, HMACMD5Context *ctx)
 /***********************************************************************
  the microsoft version of hmac_md5 initialisation.
 ***********************************************************************/
-void hmac_md5_init_limK_to_64(const uchar* key, int key_len,
+void hmac_md5_init_limK_to_64(const uint8_t* key, int key_len,
 			HMACMD5Context *ctx)
 {
         /* if key is longer than 64 bytes truncate it */
@@ -2676,7 +2191,7 @@ void hmac_md5_init_limK_to_64(const uchar* key, int key_len,
 /***********************************************************************
  update hmac_md5 "inner" buffer
 ***********************************************************************/
-void hmac_md5_update(const uchar* text, int text_len, HMACMD5Context *ctx)
+void hmac_md5_update(const uint8_t* text, int text_len, HMACMD5Context *ctx)
 {
         MD5Update(&ctx->ctx, text, text_len); /* then text of datagram */
 }
@@ -2684,7 +2199,7 @@ void hmac_md5_update(const uchar* text, int text_len, HMACMD5Context *ctx)
 /***********************************************************************
  finish off hmac_md5 "inner" buffer and generate outer one.
 ***********************************************************************/
-void hmac_md5_final(uchar *digest, HMACMD5Context *ctx)
+void hmac_md5_final(uint8_t *digest, HMACMD5Context *ctx)
 
 {
         struct MD5Context ctx_o;
@@ -2700,7 +2215,7 @@ void hmac_md5_final(uchar *digest, HMACMD5Context *ctx)
  single function to calculate an HMAC MD5 digest from data.
  use the microsoft hmacmd5 init method because the key is 16 bytes.
 ************************************************************/
-void hmac_md5(const uchar key[16], const uchar *data, int data_len, uchar* digest)
+void hmac_md5(const uint8_t key[16], const uint8_t *data, int data_len, uint8_t* digest)
 {
 	HMACMD5Context ctx;
 	hmac_md5_init_limK_to_64(key, 16, &ctx);
