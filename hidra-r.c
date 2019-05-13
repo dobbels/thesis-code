@@ -503,37 +503,44 @@ handle_subject_access_request(const uint8_t *data,
         uint16_t datalen,
         uint8_t sub_id)
 {
+	printf("Handling subject %d access request\n", sub_id);
 	uint8_t * session_key = get_session_key(sub_id);
 	if (session_key == NULL) {
-//		printf("Error: retrieving session key");
+		printf("Error: retrieving session key");
 	}
 
 	//Assumption: access request is not longer than 73 bytes
 	memcpy(messaging_buffer, data, datalen);
 
+//	printf("Full encrypted message: ");
+//	full_print_hex(messaging_buffer, datalen);
+
 	//Decrypt whole message
 	xcrypt_ctr(session_key, messaging_buffer, datalen);
 
+	printf("Full message: ");
+	full_print_hex(messaging_buffer, datalen);
+
 	//Check validity
 	uint32_t hashed;
-	hashed = murmur3_32(data, 3, 17);
-	if ((data[3] == (hashed >> 24) & 0xff) && (data[4] == (hashed >> 16) & 0xff) &&
-	(data[5] == (hashed >> 8)  & 0xff) && (data[6] == hashed & 0xff)) {
+	hashed = murmur3_32(messaging_buffer, 3, 17);
+	if ((messaging_buffer[3] == ((hashed >> 24) & 0xff)) && (messaging_buffer[4] == ((hashed >> 16) & 0xff)) &&
+	(messaging_buffer[5] == ((hashed >> 8)  & 0xff)) && (messaging_buffer[6] == (hashed & 0xff))) {
 		//Expected demo format: Action: PUT + Task: light_switch_x TODO is veranderd!
-		uint8_t action = data[0];
-		uint8_t function = data[1];
+		uint8_t action = messaging_buffer[0];
+		uint8_t function = messaging_buffer[1];
 
-		if (get_bit(2*8, data)){
-//			printf("Error: This demo does not expect any inputs\n");
+		if (get_bit(2*8, messaging_buffer)){
+			printf("Error: This demo does not expect any inputs\n");
 		}
 
 		// print request (if it is the expected demo request)
 		if (action == 2 && function == 18) {
-//			printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
+			printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
 		} else if (action == 2 && function == 19) {
-//			printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
+			printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
 		} else {
-//			printf("Did not receive the expected demo-request.\n");
+			printf("Did not receive the expected demo-request.\n");
 			return 0;
 		}
 
@@ -552,7 +559,6 @@ handle_subject_access_request(const uint8_t *data,
 			// Assumption for demo purposes: 1 single rule inside the policy
 			char rule_checks_out = 0;
 
-	//		printf(" : %d\n", );
 			// Search for rule about action PUT. TODO include action=ANY and rule without an action specified
 			if (!policy_has_at_least_one_rule(current_sub->policy)) {
 				rule_checks_out = get_policy_effect(current_sub->policy);
@@ -600,21 +606,21 @@ handle_subject_access_request(const uint8_t *data,
 				// Let's assume this operation requires a lot of battery
 				if (battery_level > 50) {
 					battery_level -= 50;
-//					printf("new battery level: %d\n", battery_level);
+					printf("new battery level: %d\n", battery_level);
 				}
 				return 1;
 			} else {
-//				printf("Request denied, because not all rules check out.\n");
+				printf("Request denied, because not all rules check out.\n");
 				return 0;
 			}
 
 		} else {
 			// deny if no association with subject exists
-//			printf("Request denied, because no association with this subject exists.\n");
+			printf("Request denied, because no association with this subject exists.\n");
 			return 0;
 		}
 	} else {
-//		printf("Request denied, hash does not match.\n");
+		printf("Request denied, hash does not match.\n");
 		return 0;
 	}
 }
@@ -1834,8 +1840,8 @@ same_mac(const uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_
 //Hash to 32 bits from https://en.wikipedia.org/wiki/MurmurHash
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 {
-//	printf("Values to hash\n");
-//	full_print_hex(key, len);
+	printf("Values to hash\n");
+	full_print_hex(key, len);
 	uint32_t h = seed;
 	if (len > 3) {
 		const uint32_t* key_x4 = (const uint32_t*) key;

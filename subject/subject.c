@@ -623,6 +623,7 @@ send_access_request(void) { //TODO encrypted with Subkey and/or rather authentic
 	// Calculate 4 byte hash of action + function + rest
 	uint32_t hashed;
 	hashed = murmur3_32(response + 1, 3, 17);
+
 	response[4] = (hashed >> 24) & 0xff;
 	response[5] = (hashed >> 16) & 0xff;
 	response[6] = (hashed >> 8)  & 0xff;
@@ -639,8 +640,14 @@ send_access_request(void) { //TODO encrypted with Subkey and/or rather authentic
 	   printf("Error: could not read session key from storage\n");
 	 }
 
+//	printf("Full message: ");
+//	full_print_hex(response, sizeof(response));
+
 	// Encrypt all bytes except the first (subject id)
 	xcrypt_ctr(session_key, response+1, sizeof(response) - 1);
+
+//	printf("Full encrypted message: ");
+//	full_print_hex(response, sizeof(response));
 
 	//TODO nieuwe hmac/hash van alles, maar subject id niet encrypteren, anders heeft resource geen idee welke sleutel te gebruiken
 	simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
