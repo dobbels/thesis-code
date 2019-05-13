@@ -103,7 +103,7 @@ receiver_resource(struct simple_udp_connection *c,
 		} else {
 			printf("Error: could not read ksr key from storage\n");
 		}
-		//TODO mag dit toch zomaar, const data aanpassen?!
+
 		xcrypt_ctr(ksr, s_r_rep, sizeof(s_r_rep));
 
 		//Check NonceSR
@@ -417,12 +417,6 @@ construct_s_r_req(uint8_t *s_r_req) {
 		printf("Error: could not read ticketR from storage.\n");
 	}
 
-	printf("ticketR: \n");
-	full_print_hex(s_r_req, 26);
-
-	printf("ticketR, bit 8: \n");
-	full_print_hex(s_r_req + 8, 1);
-
 	// Put IDs
 	s_r_req[26] = 0;
 	s_r_req[27] = subject_id;
@@ -455,7 +449,7 @@ construct_s_r_req(uint8_t *s_r_req) {
 	s_r_req[6 + start_of_key] = (part_of_nonce >> 8);
 	s_r_req[7 + start_of_key] = part_of_nonce & 0xffff;
 	part_of_nonce = random_rand();
-	s_r_req[8] = (part_of_nonce >> 8);
+	s_r_req[8 + start_of_key] = (part_of_nonce >> 8);
 	s_r_req[9 + start_of_key] = part_of_nonce & 0xffff;
 	part_of_nonce = random_rand();
 	s_r_req[10 + start_of_key] = (part_of_nonce >> 8);
@@ -489,17 +483,17 @@ construct_s_r_req(uint8_t *s_r_req) {
 		printf("Error: could not read Ksr from storage.\n");
 	}
 
-	printf("Ksr: \n");
-	full_print_hex(k_sr, 16);
+//	printf("Ksr: \n");
+//	full_print_hex(k_sr, 16);
 
-	printf("AuthNR before encryption: \n");
-	full_print_hex(s_r_req + 26, 26);
+//	printf("AuthNR before encryption: \n");
+//	full_print_hex(s_r_req + 26, 26);
 
 	// Encrypt these 26 bytes (ID + Nonce + Key)
 	xcrypt_ctr(k_sr, s_r_req + 26, 26);
 
-	printf("AuthNR after encryption: \n");
-	full_print_hex(s_r_req + 26, 26);
+//	printf("AuthNR after encryption: \n");
+//	full_print_hex(s_r_req + 26, 26);
 
 	// Generate nonce4
 	uint8_t start_of_nonce = 52;
