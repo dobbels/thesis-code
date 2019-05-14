@@ -65,7 +65,8 @@ uint8_t resource_key[16] =
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
 		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
 
-uint8_t messaging_buffer[73];
+// Enough room for a largest Hidra message
+uint8_t messaging_buffer[65];
 
 //General file structure is a concatenation of: //TODO dit kan veel beter door ze hier te declareren en in het programma te initialiseren. Dan kan je wel relatief tov elkaar indexen
 //Current last one-way key chain value Kr,cm
@@ -82,6 +83,7 @@ static void full_print_hex(const uint8_t* str, uint8_t length);
 static void print_hex(const uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
 uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_len);
+void md5(uint8_t * digest, uint8_t *initial_msg, size_t initial_len);
 
 uint8_t nb_of_associated_subjects;
 struct associated_subjects * associated_subjects;
@@ -791,11 +793,14 @@ construct_cm_ind_req(uint8_t *cm_ind_req) {
 	}
 
 	//Compute and fill MAC
-	uint8_t array_with_key[20];
-	memcpy(array_with_key, resource_key, 16);
-	memcpy(array_with_key + 16, cm_ind_req, 4);
+	static uint8_t array_to_mac[10];
+	memcpy(array_to_mac, cm_ind_req, 10);
+
+	uint8_t md5_hash[16];
+	md5(md5_hash, array_to_mac, sizeof(array_to_mac));
+
 	//Differences between murmur3 implementations => always take the first 20 bytes as a comparison for now.
-	uint32_t hashed = murmur3_32(array_with_key, 20, 17);
+	uint32_t hashed = murmur3_32(md5_hash, 16, 17);
 
 	cm_ind_req[10] = (hashed >> 24) & 0xff;
 	cm_ind_req[11] = (hashed >> 16) & 0xff;
@@ -811,7 +816,7 @@ process_cm_ind(uint8_t subject_id,
 		const uint8_t *data,
 		uint16_t datalen) {
 	const char * filename = "properties";
-	// Enough room for a 40 byte policy
+
 //	static uint8_t messaging_buffer[73];
 //	printf("datalen %d, so policy is of length %d\n", datalen, datalen - 33);
 	memcpy(messaging_buffer, data, datalen);
@@ -893,7 +898,7 @@ process_cm_ind(uint8_t subject_id,
 		} else {
 
 			//This is not handled in the demo
-//			printf("Error: key chain value shouldn't exist\n");
+			printf("Error: key chain value shouldn't exist\n");
 
 		}
 
@@ -901,7 +906,7 @@ process_cm_ind(uint8_t subject_id,
 		//TODO only in case of success(?)
 		current_subject->hid_cm_ind_success = 1;
 	} else {
-//		printf("Incorrect MAC code\n");
+		printf("Incorrect MAC code\n");
 	}
 	return need_to_request_next_key;
 }
@@ -914,19 +919,20 @@ process_cm_ind_rep(const uint8_t *data,
 	printf("Processing HID_CM_IND_REP message\n");
 
 	// MAC calculation
-	uint8_t for_mac[4];
+	static uint8_t for_mac[26];
 	memcpy(for_mac, data, 2);
 	//Get nonce 3 from storage
 	int fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
 	   cfs_seek(fd_read, nonce3_offset, CFS_SEEK_SET);
-	   cfs_read(fd_read, for_mac + 2, 2);
+	   cfs_read(fd_read, for_mac + 2, 8);
 	   cfs_close(fd_read);
 	 } else {
 	   printf("Error: could not read nonce from memory.\n");
 	 }
+	memcpy(for_mac + 10, data + 2, 16);
 
-	if(same_mac(data + 18, for_mac, 4)) {
+	if(same_mac(data + 18, for_mac, 26)) {
 		//Check key chain value with stored value
 		static uint8_t new_key[16];
 		memcpy(new_key, data + 2, 16);
@@ -944,7 +950,14 @@ process_cm_ind_rep(const uint8_t *data,
 		printf("old_key: \n");
 		full_print_hex(old_key, 16);
 
-		if (is_next_in_chain(old_key, new_key, 16)) {
+		//TODO door de implementatie van md5 kan de uitkomst in de zelfde array de initial array
+		static uint8_t next_key[16];
+		md5(next_key, new_key, 16);
+		printf("next_key: \n");
+		full_print_hex(next_key, 16);
+
+		if (memcmp(old_key, next_key, 16) == 0) {
+//		if (is_next_in_chain(old_key, new_key, 16)) {
 			//Get pending subject number for file system and update freshness
 			uint8_t subject_id;
 			fd_read = cfs_open(filename, CFS_READ);
@@ -1775,19 +1788,22 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 //Quick fix: mac is hash of (resource_key | message)
 uint8_t
 same_mac(const uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes) {
-	uint8_t array_with_key[length_in_bytes + 16];
-	memcpy(array_with_key, resource_key, 16);
-	memcpy(array_with_key + 16, array_to_check, length_in_bytes);
 //	printf("Array before hash: \n");
 //	full_print_hex(array_with_key, length_in_bytes + 16);
 //	printf("Length: %d\n", sizeof(array_with_key));
-	//Differences between murmur3 implementations => always take the first 20 bytes as a comparison for now.
-	uint32_t hashed = murmur3_32(array_with_key, 20, 17);
+
+	uint8_t md5_hash[16];
+	md5(md5_hash, array_to_check, length_in_bytes);
+
+	uint32_t hashed = murmur3_32(md5_hash, 16, 17);
 	uint8_t hashed_array[4];
 	hashed_array[0] = (hashed >> 24) & 0xff;
 	hashed_array[1] = (hashed >> 16) & 0xff;
 	hashed_array[2] = (hashed >> 8)  & 0xff;
 	hashed_array[3] = hashed & 0xff;
+
+	xcrypt_ctr(resource_key, hashed_array, 4);
+
 //	printf("Result should be: \n");
 //	full_print_hex(hashed_value, 4);
 //	printf("Actual hash: \n");

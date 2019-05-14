@@ -18,8 +18,8 @@ struct associated_subject {
 };
 
 struct policy {
-	// Assumption: policies are not larger than 40 bytes
-	uint8_t content[40];
+	// Assumption for the demo: policies are not larger than 10 bytes
+	uint8_t content[10];
 };
 
 uint8_t blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id);
