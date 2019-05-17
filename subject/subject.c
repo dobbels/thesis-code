@@ -21,6 +21,7 @@
 
 //#define ID 3
 static uint8_t subject_id = 0;
+static uint8_t pseudonym[2];
 
 static uint8_t authentication_requested = 0;
 static uint8_t credentials_requested = 0;
@@ -312,11 +313,10 @@ process_cm_rep(const uint8_t *data,
 	memcpy(cm_rep, data, datalen);
 	full_print_hex(cm_rep, sizeof(cm_rep));
 
-	// Check IDs else return 0
-	if (cm_rep[1] != subject_id) {
-		printf("Error: wrong subject id.\n");
-		return 0;
-	}
+	//Store pseudonym assigned to this subject
+	memcpy(pseudonym, cm_rep, 2);
+	printf("Received pseudonym: \n");
+	full_print_hex(pseudonym, 2);
 
 	printf("ticketR: \n");
 	full_print_hex(cm_rep + 2, 26);
@@ -417,9 +417,8 @@ construct_s_r_req(uint8_t *s_r_req) {
 		printf("Error: could not read ticketR from storage.\n");
 	}
 
-	// Put IDs
-	s_r_req[26] = 0;
-	s_r_req[27] = subject_id;
+	// Put Pseudonym
+	memcpy(s_r_req + 26, pseudonym, 2);
 
 	// Get nonceSR from storage into message
 	fd_read = cfs_open(filename, CFS_READ);
@@ -614,7 +613,7 @@ send_access_request(void) { //TODO encrypted with Subkey and/or rather authentic
 	const char *filename = "properties";
 	//Content of access request, all full bytes for simplicity
 	// = id (1 byte) + action (1 byte) + function:system_reference (1 byte) + input existence (1 bit) ( + inputs) + padding + hash (4 bytes)
-	response[0] = subject_id;
+	response[0] = pseudonym[1];
 	response[1] = 2;
 	response[2] = 18;
 	response[3] = 0; // Input non-existence bit padded with 7 extra zero-bits

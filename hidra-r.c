@@ -820,8 +820,8 @@ process_cm_ind(uint8_t subject_id,
 //	static uint8_t messaging_buffer[73];
 //	printf("datalen %d, so policy is of length %d\n", datalen, datalen - 33);
 	memcpy(messaging_buffer, data, datalen);
-//	printf("Full HID_CM_IND message: \n");
-//	full_print_hex(messaging_buffer, sizeof(messaging_buffer));
+	printf("Full HID_CM_IND message: \n");
+	full_print_hex(messaging_buffer, sizeof(messaging_buffer));
 
 	uint8_t need_to_request_next_key = 0;
 
@@ -1006,7 +1006,7 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 		return 1;
 	}
 
-//	printf("Subject id 3 == %d \n", data[3]);
+	printf("Subject id is %d \n", data[3]);
 	uint8_t subject_id = data[3];
 
 	// If this is the first exchange with the ACS: extract subject id and policy
