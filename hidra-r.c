@@ -22,18 +22,12 @@
 #include "tinycrypt/lib/include/tinycrypt/sha256.h"
 #include "tinycrypt/lib/include/tinycrypt/constants.h"
 #include "tinycrypt/lib/include/tinycrypt/utils.h"
-//#include "tinycrypt/tests/include/test_utils.h"
-
-//#include "sha.h"
-
-//#include "hmac/hmac_sha2.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
 
-//#include "policy.h"
 #include "encoded-policy.h"
 #include "bit-operations.h"
 
