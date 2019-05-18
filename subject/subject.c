@@ -268,7 +268,8 @@ construct_cm_req(uint8_t *cm_req) {
 	//Ticket granting ticket (26 bytes)
 	int fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
-	  cfs_read(fd_read, cm_req + 11, 26);
+		cfs_seek(fd_read, ticketcm_offset, CFS_SEEK_SET);
+		cfs_read(fd_read, cm_req + 11, 26);
 	  cfs_close(fd_read);
 	} else {
 	  printf("Error: could not read ticket from storage.\n");
@@ -713,80 +714,6 @@ set_global_address(void)
     }
   }
   return &ipaddr;
-}
-
-static void
-test_file_operations() {
-	/* step 1 */
-	char message[32];
-	char buf[100];
-
-	strcpy(message,"#1.hello world.");
-	strcpy(buf,message);
-	printf("step 1: %s\n", buf );
-
-	/* End Step 1. We will add more code below this comment later */
-	const char * filename = "test-file";
-	int n;
-	int fd_write = cfs_open(filename, CFS_WRITE);
-	if(fd_write != -1) {
-	  n = cfs_write(fd_write, message, sizeof(message));
-	  cfs_close(fd_write);
-	  printf("step 2: successfully written to cfs. wrote %i bytes\n", n);
-	} else {
-	  printf("Error: could not write to memory in step 2.\n");
-	}
-	/* step 3 */
-	/* reading from cfs */
-	strcpy(buf,"empty string");
-	int fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-	  cfs_read(fd_read, buf, sizeof(message));
-	  printf("step 3: %s\n", buf);
-	  cfs_close(fd_read);
-	} else {
-	  printf("Error: could not read from memory in step 3.\n");
-	}
-
-	strcpy(message,"#1.hello test.");
-	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	 if(fd_write != -1) {
-	   n = cfs_write(fd_write, message, sizeof(message));
-	   cfs_close(fd_write);
-	   printf("step 4: successfully appended data to cfs. wrote %i bytes\n",n);
-	 } else {
-	   printf("Error: could not write to memory in step 4.\n");
-	 }
-	strcpy(buf,"empty string");
-	fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		//Lukt ook in combinatie met write, schrijven op een bepaalde plaats dus?
-	   cfs_seek(fd_read, sizeof(message), CFS_SEEK_SET);
-	   cfs_read(fd_read, buf, sizeof(message));
-	   printf("step 5: #2 - %s\n", buf);
-	   cfs_seek(fd_read, sizeof(message), CFS_SEEK_SET);
-	   cfs_seek(fd_read, 8, CFS_SEEK_CUR);
-	   cfs_read(fd_read, buf, sizeof(message));
-	   printf("step 5: #2 - %s\n", buf);
-	   //Dit is om een of andere reden niet mogelijk na cfs_read. Het lukt alleen met een SEEK_SET er net voor
-	   cfs_seek(fd_read, 8, CFS_SEEK_CUR);
-	   cfs_read(fd_read, buf, sizeof(message));
-	   printf("step 5: #2 - %s\n", buf);
-	   cfs_close(fd_read);
-	 } else {
-	   printf("Error: could not read from memory in step 5.\n");
-	 }
-	/*        */
-	/* step 6 */
-	/*        */
-	/* remove the file from cfs */
-	cfs_remove(filename);
-	fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read == -1) {
-	printf("Successfully removed file\n");
-	} else {
-	printf("Error: could read from memory in step 6.\n");
-	}
 }
 
 PROCESS_THREAD(hidra_subject, ev, data)
