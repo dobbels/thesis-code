@@ -49,6 +49,31 @@ static uint8_t subject_key[16] =
 uint8_t credential_manager_key[16];
 uint8_t credential_manager_nonce[8];
 
+uint16_t access_counter = 0;
+
+static void
+store_access_counter(uint8_t * nonce) {
+	access_counter = ((*nonce) << 8) | ((*(nonce+1)));
+}
+
+static uint8_t
+nonce_equals(uint16_t ctr, uint8_t * nonce) {
+	return ((ctr >> 8) == *nonce && (ctr & 0xff) == *(nonce+1));
+}
+
+static void
+get_access_counter(uint8_t * nonce) {
+	*nonce = access_counter >> 8;
+	*(nonce+1) = (access_counter & 0xff);
+}
+
+static void
+get_access_counter_increment(uint8_t * nonce) {
+	access_counter++;
+	*nonce = access_counter >> 8;
+	*(nonce+1) = (access_counter & 0xff);
+}
+
 //File structure is a concatenation of:
 //Nonce1 (8 bytes)
 int nonce1_offset;
@@ -74,6 +99,7 @@ int nonce4_offset;
 static void full_print_hex(const uint8_t* str, uint8_t length);
 static void print_hex(const uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
+void compute_mac(uint8_t *key, const uint8_t *data, uint8_t datalen, uint8_t * final_digest);
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
 
 PROCESS(hidra_subject,"HidraSubject");
@@ -94,16 +120,27 @@ receiver_resource(struct simple_udp_connection *c,
 		  receiver_port, sender_port, datalen);
 	printf("Data Rx: %.*s\n", datalen, data);
 
-	if (datalen > 1) {
+	const char * filename = "properties";
+
+	//Check session key
+	static uint8_t session_key[16];
+	int fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+		cfs_seek(fd_read, subkey_offset, CFS_SEEK_SET);
+		cfs_read(fd_read, session_key, sizeof(session_key));
+		cfs_close(fd_read);
+	} else {
+		printf("Error: could not read session key from storage\n");
+	}
+
+	if (datalen == 32) {
 		static uint8_t s_r_rep[32];
 		memcpy(s_r_rep, data, sizeof(s_r_rep));
-
-		const char * filename = "properties";
 
 		printf("Received HID_S_R_REP.\n");
 		//Decrypt message
 		static uint8_t ksr[16];
-		int fd_read = cfs_open(filename, CFS_READ);
+		fd_read = cfs_open(filename, CFS_READ);
 		if(fd_read!=-1) {
 			cfs_seek(fd_read, k_sr_offset, CFS_SEEK_SET);
 			cfs_read(fd_read, ksr, sizeof(ksr));
@@ -135,16 +172,6 @@ receiver_resource(struct simple_udp_connection *c,
 				printf("Error: could not read nonce4 from storage\n");
 			}
 			if (memcmp(nonce, s_r_rep + 24, 8) == 0){
-				//Check session key
-				static uint8_t session_key[16];
-				fd_read = cfs_open(filename, CFS_READ);
-				if(fd_read!=-1) {
-					cfs_seek(fd_read, subkey_offset, CFS_SEEK_SET);
-					cfs_read(fd_read, session_key, sizeof(session_key));
-					cfs_close(fd_read);
-				} else {
-					printf("Error: could not read session key from storage\n");
-				}
 				if (memcmp(session_key, s_r_rep + 8, 16) != 0){
 					printf("Resource proposed different key\n");
 					//Store key
@@ -157,6 +184,21 @@ receiver_resource(struct simple_udp_connection *c,
 			}
 		} else {
 			printf("Wrong NonceSR HID_S_R_REP.\n");
+		}
+	} else if (datalen == 3) {
+		uint8_t access_response[3];
+		memcpy(access_response, data, sizeof(access_response));
+		xcrypt_ctr(session_key, access_response, sizeof(access_response));
+		if (nonce_equals(access_counter+1, access_response + 1)) {
+			store_access_counter(access_response + 1);
+			printf("access_response[0]: %d\n", access_response[0]);
+			if(access_response[0]){
+				printf("Received Acknowledge.\n");
+			} else {
+				printf("Received Non-Acknowledge.\n");
+			}
+		} else {
+			printf("Not Nonce + i: Message out of sync.\n");
 		}
 	} else {
 		if(data[0]){
@@ -501,17 +543,8 @@ construct_s_r_req(uint8_t *s_r_req) {
 		printf("Error: could not read Ksr from storage.\n");
 	}
 
-//	printf("Ksr: \n");
-//	full_print_hex(k_sr, 16);
-
-//	printf("AuthNR before encryption: \n");
-//	full_print_hex(s_r_req + 26, 26);
-
 	// Encrypt these 26 bytes (ID + Nonce + Key)
 	xcrypt_ctr(k_sr, s_r_req + 26, 26);
-
-//	printf("AuthNR after encryption: \n");
-//	full_print_hex(s_r_req + 26, 26);
 
 	// Generate nonce4
 	uint8_t start_of_nonce = 52;
@@ -538,6 +571,8 @@ construct_s_r_req(uint8_t *s_r_req) {
 	} else {
 	  printf("Error: could not write Nonce4 to storage.\n");
 	}
+
+	store_access_counter(s_r_req + start_of_nonce + 6);
 }
 
 static void
@@ -641,25 +676,25 @@ start_hidra_protocol(void) {
 }
 
 static void
-send_access_request(void) { //TODO encrypted with Subkey and/or rather authenticated with MAC? -> encrypt(message + hash(message)) using subkey
-	static uint8_t response[8];
+send_access_request(void) {
+	uint8_t message_length = 6;
+	uint8_t response[message_length + 4];
 	const char *filename = "properties";
 	//Content of access request, all full bytes for simplicity
 	// = id (1 byte) + action (1 byte) + function:system_reference (1 byte) + input existence (1 bit) ( + inputs) + padding + hash (4 bytes)
 	response[0] = pseudonym[1];
-	response[1] = 2;
-	response[2] = 18;
-	response[3] = 0; // Input non-existence bit padded with 7 extra zero-bits
-	// input existence boolean: if input exists, first bit is set to 1 and input couples <type,value> follow
+	uint8_t action = 2;
+	uint8_t function = 18;
+	uint8_t input_existence = 0;
+	response[1] = (action << 6) | (function >> 2);
+	printf("response[1] %d should be 132 \n", response[1]);
+	response[2] = (function << 6) | (input_existence >> 2); // with 5 padding zero-bits
+	printf("response[2] %d should be 128 \n", response[2]);
 
-	// Calculate 4 byte hash of action + function + rest
-	uint32_t hashed;
-	hashed = murmur3_32(response + 1, 3, 17);
+	// input existence boolean: if input exists, the bit is set to 1 and input couples <type,value> follow
 
-	response[4] = (hashed >> 24) & 0xff;
-	response[5] = (hashed >> 16) & 0xff;
-	response[6] = (hashed >> 8)  & 0xff;
-	response[7] = hashed & 0xff;
+	//Put incremented access counter in message
+	get_access_counter_increment(response + 3);
 
 	//Get session key from storage
 	static uint8_t session_key[16];
@@ -672,14 +707,13 @@ send_access_request(void) { //TODO encrypted with Subkey and/or rather authentic
 	   printf("Error: could not read session key from storage\n");
 	 }
 
-//	printf("Full message: ");
-//	full_print_hex(response, sizeof(response));
+	// Calculate 4 byte mac of action + function + rest
+	compute_mac(session_key, response, message_length, response + message_length);
 
-	// Encrypt all bytes except the first (subject id)
-	xcrypt_ctr(session_key, response+1, sizeof(response) - 1);
+	// Encrypt-and-MAC (E&M)
+	// Encrypt all bytes except the first (subject id) and the last 4 (MAC)
+	xcrypt_ctr(session_key, response + 1, sizeof(response) - 5);
 
-//	printf("Full encrypted message: ");
-//	full_print_hex(response, sizeof(response));
 
 	//TODO nieuwe hmac/hash van alles, maar subject id niet encrypteren, anders heeft resource geen idee welke sleutel te gebruiken
 	simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
@@ -774,9 +808,16 @@ PROCESS_THREAD(hidra_subject, ev, data)
 
 		if ((ev==sensors_event) && (data == &button_sensor)) {
 			if (testing) {
-//				test_file_operations();
-//				static uint8_t response[80];
-//				simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
+				access_counter = 564;
+				uint8_t test[2];
+				memset(test, 0, 2);
+				printf("nonce_equals(%d, test): %d\n", access_counter, nonce_equals(access_counter, test));
+				get_access_counter(test);
+				printf("nonce_equals(%d, test): %d\n", access_counter, nonce_equals(access_counter, test));
+				get_access_counter_increment(test);
+				printf("nonce_equals(%d, test): %d\n", access_counter, nonce_equals(access_counter, test));
+				access_counter++;
+				printf("nonce_equals(%d, test): %d\n", access_counter, nonce_equals(access_counter, test));
 			}
 			else if (!security_association_established) {
 				printf("Starting Hidra Protocol\n");
@@ -787,6 +828,27 @@ PROCESS_THREAD(hidra_subject, ev, data)
 		}
 	}
 	PROCESS_END();
+}
+
+//Expects a digest of 4 bytes
+void compute_mac(uint8_t *key, const uint8_t *data, uint8_t datalen, uint8_t * final_digest) {
+	static struct tc_hmac_state_struct h;
+
+	(void)memset(&h, 0x00, sizeof(h));
+	(void)tc_hmac_set_key(&h, key, 16);
+
+	static uint8_t digest[32];
+
+	(void)tc_hmac_init(&h);
+	(void)tc_hmac_update(&h, data, datalen);
+	(void)tc_hmac_final(digest, TC_SHA256_DIGEST_SIZE, &h);
+
+	uint32_t hashed = murmur3_32(digest, 32, 17);
+
+	final_digest[0] = (hashed >> 24) & 0xff;
+	final_digest[1] = (hashed >> 16) & 0xff;
+	final_digest[2] = (hashed >> 8)  & 0xff;
+	final_digest[3] = hashed & 0xff;
 }
 
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
