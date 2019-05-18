@@ -1,8 +1,13 @@
 CONTIKI_PROJECT = hidra-r
 all: $(CONTIKI_PROJECT)
 
+#CONTIKI_NO_NET=1
+
 UIP_CONF_IPV6=1
 CFLAGS+= -DUIP_CONF_IPV6_RPL
+CFLAGS+= -Os
+CFLAGS += -ffunction-sections
+LDFLAGS += -Wl,--gc-sections,--undefined=_reset_vector__,--undefined=InterruptVectors,--undefined=_copy_data_init__,--undefined=_clear_bss_init__,--undefined=_end_of_init__
 
 CONTIKI_WITH_IPV6 = 1
 

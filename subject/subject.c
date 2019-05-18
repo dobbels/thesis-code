@@ -34,7 +34,7 @@ static struct simple_udp_connection unicast_connection_resource;
 uip_ipaddr_t resource_addr;
 uip_ipaddr_t server_addr;
 
-uint8_t subject_key[16] =
+static uint8_t subject_key[16] =
 	{ (uint8_t) 0x7e, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x16,
 		(uint8_t) 0x28, (uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x2b,
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
@@ -88,14 +88,14 @@ receiver_resource(struct simple_udp_connection *c,
 	printf("Data Rx: %.*s\n", datalen, data);
 
 	if (datalen > 1) {
-		uint8_t s_r_rep[32];
+		static uint8_t s_r_rep[32];
 		memcpy(s_r_rep, data, sizeof(s_r_rep));
 
 		const char * filename = "properties";
 
 		printf("Received HID_S_R_REP.\n");
 		//Decrypt message
-		uint8_t ksr[16];
+		static uint8_t ksr[16];
 		int fd_read = cfs_open(filename, CFS_READ);
 		if(fd_read!=-1) {
 			cfs_seek(fd_read, k_sr_offset, CFS_SEEK_SET);
@@ -108,7 +108,7 @@ receiver_resource(struct simple_udp_connection *c,
 		xcrypt_ctr(ksr, s_r_rep, sizeof(s_r_rep));
 
 		//Check NonceSR
-		uint8_t nonce[8];
+		static uint8_t nonce[8];
 		fd_read = cfs_open(filename, CFS_READ);
 		if(fd_read!=-1) {
 			cfs_seek(fd_read, nonce_sr_offset, CFS_SEEK_SET);
@@ -129,7 +129,7 @@ receiver_resource(struct simple_udp_connection *c,
 			}
 			if (memcmp(nonce, s_r_rep + 24, 8) == 0){
 				//Check session key
-				uint8_t session_key[16];
+				static uint8_t session_key[16];
 				fd_read = cfs_open(filename, CFS_READ);
 				if(fd_read!=-1) {
 					cfs_seek(fd_read, subkey_offset, CFS_SEEK_SET);
@@ -217,7 +217,7 @@ process_ans_rep(const uint8_t *data,
 	   printf("Error: could not write Noncescm to storage.\n");
 	}
 
-	//TODO store nonce1 and IDcm at start of protocol and check them here?
+	//TODO store nonce1 at start of protocol and check it here?
 }
 
 static void
@@ -286,7 +286,7 @@ construct_cm_req(uint8_t *cm_req) {
 	printf("Unencrypted CM_REQ message: \n");
 	full_print_hex(cm_req, 47);
 
-	uint8_t kscm[16];
+	static uint8_t kscm[16];
 	fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
 		cfs_seek(fd_read, kscm_offset, CFS_SEEK_SET);
@@ -336,7 +336,7 @@ process_cm_rep(const uint8_t *data,
 	}
 
 	// Get Kscm key from storage
-	uint8_t kscm[16];
+	static uint8_t kscm[16];
 	int fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
 		cfs_seek(fd_read, kscm_offset, CFS_SEEK_SET);
@@ -350,7 +350,7 @@ process_cm_rep(const uint8_t *data,
 	xcrypt_ctr(kscm, cm_rep + 28, 34);
 
 	// Get Nonce2 from storage
-	uint8_t nonce2[8];
+	static uint8_t nonce2[8];
 	fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
 		cfs_seek(fd_read, nonce2_offset, CFS_SEEK_SET);
@@ -472,7 +472,7 @@ construct_s_r_req(uint8_t *s_r_req) {
 	}
 
 	// Get encryption key from storage
-	uint8_t k_sr[16];
+	static uint8_t k_sr[16];
 	fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
 		cfs_seek(fd_read, k_sr_offset, CFS_SEEK_SET);
@@ -574,7 +574,7 @@ receiver_server(struct simple_udp_connection *c,
 
 static void
 start_hidra_protocol(void) {
-	uint8_t ans_request[15];
+	static uint8_t ans_request[15];
 	// IdS (2 bytes)
 	ans_request[0] = 0;
 	ans_request[1] = subject_id;
@@ -609,7 +609,7 @@ start_hidra_protocol(void) {
 
 static void
 send_access_request(void) { //TODO encrypted with Subkey and/or rather authenticated with MAC? -> encrypt(message + hash(message)) using subkey
-	uint8_t response[8];
+	static uint8_t response[8];
 	const char *filename = "properties";
 	//Content of access request, all full bytes for simplicity
 	// = id (1 byte) + action (1 byte) + function:system_reference (1 byte) + input existence (1 bit) ( + inputs) + padding + hash (4 bytes)
@@ -629,7 +629,7 @@ send_access_request(void) { //TODO encrypted with Subkey and/or rather authentic
 	response[7] = hashed & 0xff;
 
 	//Get session key from storage
-	uint8_t session_key[16];
+	static uint8_t session_key[16];
 	int fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
 	   cfs_seek(fd_read, subkey_offset, CFS_SEEK_SET);
@@ -810,7 +810,7 @@ PROCESS_THREAD(hidra_subject, ev, data)
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 {
 	uint8_t iv[16]  = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
-	struct AES_ctx ctx;
+	static struct AES_ctx ctx;
 
 	AES_init_ctx_iv(&ctx, key, iv);
 	AES_CTR_xcrypt_buffer(&ctx, in, length);
