@@ -45,24 +45,26 @@ uint8_t credential_manager_key[16];
 uint8_t credential_manager_nonce[8];
 
 //File structure is a concatenation of:
+//Nonce1 (8 bytes)
+int nonce1_offset;
 //TicketCM (26 bytes)
-int ticketcm_offset = 0;
+int ticketcm_offset;
 //Kscm (16 bytes)
-int kscm_offset = 26;
+int kscm_offset;
 //Noncescm (8 bytes)
-int noncescm_offset = 42;
+int noncescm_offset;
 //Nonce2 (8 bytes)
-int nonce2_offset = 50;
+int nonce2_offset;
 //TicketR (26 bytes)
-int ticketr_offset = 58;
+int ticketr_offset;
 //Ksr (16 bytes)
-int k_sr_offset = 84;
+int k_sr_offset;
 //Noncesr (8 bytes)
-int nonce_sr_offset = 100;
+int nonce_sr_offset;
 //Subkey (16 bytes)
-int subkey_offset = 108;
+int subkey_offset;
 //Nonce4
-int nonce4_offset = 124;
+int nonce4_offset;
 
 static void full_print_hex(const uint8_t* str, uint8_t length);
 static void print_hex(const uint8_t* str, uint8_t len);
@@ -170,7 +172,7 @@ process_ans_rep(const uint8_t *data,
 	full_print_hex(ans_rep, sizeof(ans_rep));
 
 	//Store the encrypted TGT for the credential manager
-	int fd_write = cfs_open(filename, CFS_WRITE);
+	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
 	if(fd_write != -1) {
 		int n = cfs_write(fd_write, ans_rep + 2, 26);
 		cfs_close(fd_write);
@@ -189,35 +191,46 @@ process_ans_rep(const uint8_t *data,
 	printf("Decrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
 	full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
 
-	printf("Decrypted HID_ANS_REP, Kscm: \n");
-	full_print_hex(ans_rep+encrypted_index, 16);
-
-	//Store Kscm
-	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, ans_rep + encrypted_index, 16);
-		cfs_close(fd_write);
-		printf("Successfully written Kscm (%i bytes) to %s\n", n, filename);
-		printf("\n");
+	static uint8_t nonce1[8];
+	int fd_read = cfs_open(filename, CFS_READ);
+	if (fd_read != -1) {
+		cfs_read(fd_read, nonce1, 8);
+		cfs_close(fd_read);
 	} else {
-	   printf("Error: could not write Kscm to storage.\n");
+		printf("Error: could not read nonce1 from storage.\n");
 	}
+	if (memcmp(ans_rep + encrypted_index + 24, nonce1, 8) == 0) {
 
-	printf("Decrypted HID_ANS_REP, Noncescm: \n");
-	full_print_hex(ans_rep+encrypted_index+16, 8);
+		printf("Decrypted HID_ANS_REP, Kscm: \n");
+		full_print_hex(ans_rep+encrypted_index, 16);
 
-	//Store Noncescm
-	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, ans_rep + encrypted_index + 16, 8);
-		cfs_close(fd_write);
-		printf("Successfully written Noncescm (%i bytes) to %s\n", n, filename);
-		printf("\n");
+		//Store Kscm
+		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+		if(fd_write != -1) {
+			int n = cfs_write(fd_write, ans_rep + encrypted_index, 16);
+			cfs_close(fd_write);
+			printf("Successfully written Kscm (%i bytes) to %s\n", n, filename);
+			printf("\n");
+		} else {
+		   printf("Error: could not write Kscm to storage.\n");
+		}
+
+		printf("Decrypted HID_ANS_REP, Noncescm: \n");
+		full_print_hex(ans_rep+encrypted_index+16, 8);
+
+		//Store Noncescm
+		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+		if(fd_write != -1) {
+			int n = cfs_write(fd_write, ans_rep + encrypted_index + 16, 8);
+			cfs_close(fd_write);
+			printf("Successfully written Noncescm (%i bytes) to %s\n", n, filename);
+			printf("\n");
+		} else {
+		   printf("Error: could not write Noncescm to storage.\n");
+		}
 	} else {
-	   printf("Error: could not write Noncescm to storage.\n");
+		printf("Error: unsecure response, nonce1 does not match.\n");
 	}
-
-	//TODO store nonce1 at start of protocol and check it here?
 }
 
 static void
@@ -575,6 +588,8 @@ receiver_server(struct simple_udp_connection *c,
 static void
 start_hidra_protocol(void) {
 	static uint8_t ans_request[15];
+	const char *filename = "properties";
+
 	// IdS (2 bytes)
 	ans_request[0] = 0;
 	ans_request[1] = subject_id;
@@ -598,6 +613,18 @@ start_hidra_protocol(void) {
 	part_of_nonce = random_rand();
 	ans_request[13] = (part_of_nonce >> 8);
 	ans_request[14] = part_of_nonce & 0xffff;
+
+	//Store generated nonce
+	int fd_write = cfs_open(filename, CFS_WRITE);
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, ans_request + 7, 8);
+		cfs_close(fd_write);
+		printf("Successfully written nonce1 (%i bytes) to %s\n", n, filename);
+		printf("\n");
+	} else {
+	  printf("Error: could not write nonce1 to storage.\n");
+	}
+
 //	printf("Nonce1: \n");
 //	full_print_hex(ans_request + 7,8);
 	printf("ANS request message: \n");
@@ -786,6 +813,29 @@ PROCESS_THREAD(hidra_subject, ev, data)
 	simple_udp_register(&unicast_connection_resource, RESOURCE_UDP_PORT,
 						  NULL, RESOURCE_UDP_PORT,
 						  receiver_resource);
+
+	//File structure is a concatenation of:
+	//Nonce1 (8 bytes)
+	nonce1_offset = 0;
+	//TicketCM (26 bytes)
+	ticketcm_offset = nonce1_offset + 8;
+	//Kscm (16 bytes)
+	kscm_offset = ticketcm_offset + 26;
+	//Noncescm (8 bytes)
+	noncescm_offset = kscm_offset + 16;
+	//Nonce2 (8 bytes)
+	nonce2_offset = noncescm_offset + 8;
+	//TicketR (26 bytes)
+	ticketr_offset = nonce2_offset + 8;
+	//Ksr (16 bytes)
+	k_sr_offset = ticketr_offset + 26;
+	//Noncesr (8 bytes)
+	nonce_sr_offset = k_sr_offset + 16;
+	//Subkey (16 bytes)
+	subkey_offset = nonce_sr_offset + 8;
+	//Nonce4
+	nonce4_offset = subkey_offset + 16;
+
 	uint8_t testing = 0;
 	while(1) {
 		PROCESS_WAIT_EVENT();
