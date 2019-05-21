@@ -31,21 +31,10 @@
 #include "encoded-policy.h"
 #include "bit-operations.h"
 
-
-
-
-// To print the IPv6 addresses in a friendlier way
-//#include "debug.h"
-//#define DEBUG DEBUG_PRINT
-//#include "net/ip/uip-debug.h"
-
-//#include "hmac-sha1.h"
-
 #define SERVER_UDP_PORT 1234
 #define SUBJECT_UDP_PORT 1996
 
 #define MAX_NUMBER_OF_SUBJECTS 3
-#define hassaasn_test 2
 
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
 void compute_mac(uint8_t *key, const uint8_t *data, uint8_t datalen, uint8_t * final_digest);
@@ -111,28 +100,27 @@ void
 deassociate_subject(struct associated_subject *sub)
 {
 	memb_free(&alloc_associated_subjects, sub);
-
 }
 
-MEMB(policies, struct policy, MAX_NUMBER_OF_SUBJECTS);
-
-struct policy *
-store_policy(struct associated_subject * subject, uint8_t *policy_to_copy)
-{
-	struct policy * policy = memb_alloc(&policies);
-	if(policy == NULL) {
-		return NULL;
-	}
-	memcpy(policy->content, policy_to_copy, subject->policy_size);
-	subject->policy = policy->content;
-	return policy;
-}
-
-void
-delete_policy(struct policy *p)
-{
-	memb_free(&policies, p);
-}
+//MEMB(policies, struct policy, MAX_NUMBER_OF_SUBJECTS);
+//
+//struct policy *
+//store_policy(struct associated_subject * subject, uint8_t *policy_to_copy)
+//{
+//	struct policy * policy = memb_alloc(&policies);
+//	if(policy == NULL) {
+//		return NULL;
+//	}
+//	memcpy(policy->content, policy_to_copy, subject->policy_size);
+//	subject->policy = policy->content;
+//	return policy;
+//}
+//
+//void
+//delete_policy(struct policy *p)
+//{
+//	memb_free(&policies, p);
+//}
 
 struct nonce_sr {
    uint8_t content[8];
@@ -295,7 +283,7 @@ send_access_nack(struct simple_udp_connection *c,
 static void
 send_access_ack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
-		uint8_t subject_id)
+		uint8_t * subject_id)
 {
 	printf("Sending ACK to \n");
 
@@ -517,9 +505,6 @@ store_access_counter(uint8_t subject_id, uint8_t * nonce) {
 
 static void
 get_access_counter_increment(uint8_t subject_id, uint8_t * nonce) {
-	printf("Putting access counter: \n");
-	full_print_hex(nonce, 2);
-
 	printf("subject_id: %d\n", subject_id);
 	int sub_index = 0;
 	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
@@ -527,13 +512,15 @@ get_access_counter_increment(uint8_t subject_id, uint8_t * nonce) {
 			associated_subjects->subject_association_set[sub_index]->access_counter++;
 			*nonce = associated_subjects->subject_association_set[sub_index]->access_counter >> 8;
 			*(nonce+1) = (associated_subjects->subject_association_set[sub_index]->access_counter & 0xff);
+			printf("Get access counter increment: \n");
+			full_print_hex(nonce, 2);
 		}
 	}
 }
 
 static uint8_t
 new_nonce_is_greater_than_counter(uint8_t subject_id, uint8_t * nonce) {
-	printf("Putting access counter: \n");
+	printf("New counter: \n");
 	full_print_hex(nonce, 2);
 
 	printf("subject_id: %d\n", subject_id);
@@ -603,14 +590,14 @@ handle_subject_access_request(const uint8_t *data,
 	}
 
 	// Encrypt-and-MAC (E&M) => Decrypt-and-MAC
-	xcrypt_ctr(session_key, data + 1, datalen - 5);
+	xcrypt_ctr(session_key, data + 2, datalen - 6);
 
 	uint8_t mac[4];
 	compute_mac(session_key, data, datalen - 4, mac);
 
 	if (memcmp(data + datalen - 4, mac, 4) == 0) {
 
-		int bit_index = 8;
+		int bit_index = 16;
 		uint8_t action = get_bits_between(bit_index, bit_index + 2, data);
 		bit_index += 2;
 		uint8_t function = get_char_from(bit_index, data);
@@ -620,8 +607,8 @@ handle_subject_access_request(const uint8_t *data,
 			printf("Error: This demo does not expect any inputs\n");
 		}
 
-		if (new_nonce_is_greater_than_counter(sub_id, data + 3)) {
-			store_access_counter(sub_id, data + 3);
+		if (new_nonce_is_greater_than_counter(sub_id, data + 4)) {
+			store_access_counter(sub_id, data + 4);
 
 			// print request (if it is the expected demo request)
 			if (action == 2 && function == 18) {
@@ -750,9 +737,6 @@ process_s_r_req(struct simple_udp_connection *c,
 	if (is_already_associated(subject_id) && hid_cm_ind_success(subject_id) && fresh_information(subject_id)) {
 		// Assumption: no access control attributes to check
 
-		//Store access counter for this subject
-		store_access_counter(subject_id, messaging_buffer + 58);
-
 		static uint8_t ksr[16];
 		memcpy(ksr, messaging_buffer, 16);
 		printf("Ksr: \n");
@@ -798,6 +782,11 @@ process_s_r_req(struct simple_udp_connection *c,
 		// Accept and store subkey/session key (in memory allocated for this subject)
 		set_session_key(subject_id, messaging_buffer + 36);
 
+		//Store access counter for freshness of future accesses
+		uint8_t zero[2];
+		memset(zero,0,2);
+		store_access_counter(subject_id, zero);
+
 		set_hid_s_r_req_success(subject_id, 1);
 
 //		printf("Constructing HID_S_R_REP message\n");
@@ -831,7 +820,8 @@ receiver_subject(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
-	printf("Received data from subject with length %d\n", datalen);
+	printf("Received data from subject %d with length %d\n", data[1], datalen);
+	full_print_hex(data, datalen);
 	// Rough demo separator between access request and key establishment request
 	if (datalen > 20) {
 		//TODO handle response
@@ -840,7 +830,7 @@ receiver_subject(struct simple_udp_connection *c,
 			send_nack(c, sender_addr);
 		}
 	} else {
-		uint8_t subject_id = data[0];
+		uint8_t subject_id = data[1];
 		if (hid_s_r_req_success(subject_id) && fresh_information(subject_id)) {
 			uint8_t result = handle_subject_access_request(data, datalen, subject_id);
 			if (result == -1) {
@@ -878,8 +868,6 @@ construct_cm_ind_req(uint8_t *cm_ind_req) {
 	cm_ind_req[8] = (part_of_nonce >> 8);
 	cm_ind_req[9] = part_of_nonce & 0xffff;
 
-//	printf("Nonce3: \n");
-//	full_print_hex(cm_ind_req+2, 8);
 	//Store Nonce3 for later use
 	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
 	if(fd_write != -1) {
@@ -888,7 +876,7 @@ construct_cm_ind_req(uint8_t *cm_ind_req) {
 		printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
 		printf("\n");
 	} else {
-//	   printf("Error: could not write Nonce3 to memory.\n");
+	   printf("Error: could not write Nonce3 to memory.\n");
 	}
 
 	//Compute and fill MAC
@@ -896,9 +884,6 @@ construct_cm_ind_req(uint8_t *cm_ind_req) {
 	memcpy(array_to_mac, cm_ind_req, 10);
 
 	compute_mac(resource_key, array_to_mac, sizeof(array_to_mac), cm_ind_req + 10);
-
-//	printf("Resulting hash: \n");
-//	full_print_hex(cm_ind_req+10, 4);
 }
 
 static uint8_t
@@ -917,34 +902,31 @@ process_cm_ind(uint8_t subject_id,
 
 	if(same_mac(messaging_buffer + datalen - 4, messaging_buffer + 2, datalen - 6, resource_key)) {
 		if (nb_of_associated_subjects >= 10) {
-//			printf("Oops, the number of associated subjects is currently set to 10.\n");
+			printf("Oops, the number of associated subjects is currently set to 10.\n");
 		}
 		nb_of_associated_subjects++;
 
 		struct associated_subject *current_subject = associate_new_subject(subject_id);
 
 		if (current_subject == NULL) {
-//			printf("Error in associate_new_subject(subject_id)\n");
+			printf("Error in associate_new_subject(subject_id)\n");
 		}
 
 		associated_subjects->subject_association_set[nb_of_associated_subjects - 1] = current_subject;
 
 		// assign policy size based on knowledge about the rest of the message
 		current_subject->policy_size = datalen - 33;
-//		printf("new subject policy_size: %d\n", current_subject->policy_size);
 
 		// decrypt policy before storage
 		xcrypt_ctr(resource_key, messaging_buffer + 29, current_subject->policy_size);
 
 		// allocate memory and copy decrypted policy
-		struct policy *p =  store_policy(current_subject, messaging_buffer + 29);
-		if(p == NULL) {
+//		struct policy *p =  store_policy(current_subject, messaging_buffer + 29);
+//		if(p == NULL) {
 //			printf("Error in store_policy()\n");
-		}
+//		}
 
-		// print policy, for debugging
-//		printf("Policy associated to subject %d : \n", subject_id);
-//		print_policy(current_subject->policy, 0);
+		memcpy(current_subject->policy, messaging_buffer + 29, current_subject->policy_size);
 
 		//Ignore lifetime value
 
@@ -954,15 +936,9 @@ process_cm_ind(uint8_t subject_id,
 			printf("Error in set_nonce_sr()\n");
 		}
 
-//		printf("Nonce_sr:\n");
-//		full_print_hex(current_subject->nonce_sr, 8);
-
 		if (!any_previous_key_chain_value_stored) {
-			any_previous_key_chain_value_stored = 1; //=> on requests from next subjects, to do or not to do?
 			current_subject->fresh_information = 0;
 
-//			printf("Kircm: \n");
-//			full_print_hex(messaging_buffer + 13, 16);
 			//Write this value to file system
 			int fd_write = cfs_open(filename, CFS_WRITE);
 			if(fd_write != -1) {
@@ -971,8 +947,9 @@ process_cm_ind(uint8_t subject_id,
 				printf("Successfully written Kircm (%i bytes) to %s\n", n, filename);
 				printf("\n");
 			} else {
-//			   printf("Error: could not write Kircm to memory.\n");
+			   printf("Error: could not write Kircm to memory.\n");
 			}
+			any_previous_key_chain_value_stored = 1; //=> on requests from next subjects, to do or not to do?
 
 			//Write subject id to file system to update freshness later on
 			fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
@@ -982,7 +959,7 @@ process_cm_ind(uint8_t subject_id,
 				printf("Successfully written subject id (%i bytes) to %s\n", n, filename);
 				printf("\n");
 			} else {
-//			   printf("Error: could not write subject id to memory.\n");
+			   printf("Error: could not write subject id to memory.\n");
 			}
 			need_to_request_next_key = 1;
 		} else {
@@ -1040,7 +1017,6 @@ process_cm_ind_rep(const uint8_t *data,
 		printf("old_key: \n");
 		full_print_hex(old_key, 16);
 
-		//TODO door de implementatie van md5 kan de uitkomst in de zelfde array de initial array
 		static uint8_t next_key[16];
 		md5(next_key, new_key, 16);
 		printf("next_key: \n");
@@ -1078,21 +1054,20 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 		const uint8_t *data,
         uint16_t datalen)
 {
-//	printf("Resource id 2 == %d \n", data[1]);
-
 	if (datalen < 33) {
 		if (process_cm_ind_rep(data, datalen)) {
 			send_ack(c, sender_addr);
 		} else {
 			send_nack(c, sender_addr);
 		}
+
+
 		//Clean up for next demo association (as it is at the moment)
 		any_previous_key_chain_value_stored = 0;
-
 		const char * filename = "properties";
 		cfs_remove(filename);
-//		printf("\n");
-//		printf("End of Hidra exchange with ACS\n");
+		printf("\n");
+		printf("End of Hidra exchange with ACS\n");
 		return 1;
 	}
 
@@ -1108,6 +1083,7 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 			//Send message to credential manager
 			simple_udp_sendto(c, response, sizeof(response), sender_addr);
 		} else {
+			set_fresh_information(subject_id, 1);
 			printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
 		}
 	}
@@ -1157,17 +1133,12 @@ receiver_server(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
-//  printf("\nData received from: ");
-//  PRINT6ADDR(sender_addr);
-//  printf("\nAt port %d from port %d with length %d\n",
-//		  receiver_port, sender_port, datalen);
-//  printf("\n");
   //The first byte indicates the purpose of this message from the trusted server
   if (data[0]) {
 	  if (is_already_associated(data[2])) {
 		  handle_policy_update(c, sender_addr, data+1, datalen-1, 0);
 	  } else {
-//		  printf("Trying to update a policy of a non-associated subject. \n");
+		  printf("Trying to update a policy of a non-associated subject. \n");
 	  }
   } else {
 	  set_up_hidra_association_with_server(c, sender_addr, data+1, datalen-1);

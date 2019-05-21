@@ -362,10 +362,6 @@ construct_cm_req(uint8_t *cm_req) {
 
 	//Encrypt last 10 bytes of message
 	xcrypt_ctr(kscm, cm_req + 37, 10);
-//	printf("Encrypted CM_REQ message: \n");
-//	full_print_hex(cm_req, 47);
-//	printf("with Kscm: \n");
-//	full_print_hex(kscm, 16);
 }
 
 static uint8_t
@@ -573,7 +569,8 @@ construct_s_r_req(uint8_t *s_r_req) {
 	  printf("Error: could not write Nonce4 to storage.\n");
 	}
 
-	store_access_counter(s_r_req + start_of_nonce + 6);
+	//So that in every new session, the counter is set to zero
+	access_counter = 0;
 }
 
 static void
@@ -678,24 +675,24 @@ start_hidra_protocol(void) {
 
 static void
 send_access_request(void) {
-	uint8_t message_length = 6;
+	uint8_t message_length = 7;
 	uint8_t response[message_length + 4];
 	const char *filename = "properties";
 	//Content of access request, all full bytes for simplicity
 	// = id (1 byte) + action (1 byte) + function:system_reference (1 byte) + input existence (1 bit) ( + inputs) + padding + hash (4 bytes)
-	response[0] = pseudonym[1];
+	memcpy(response, pseudonym, 2);
 	uint8_t action = 2;
 	uint8_t function = 18;
 	uint8_t input_existence = 0;
-	response[1] = (action << 6) | (function >> 2);
-	printf("response[1] %d should be 132 \n", response[1]);
-	response[2] = (function << 6) | (input_existence >> 2); // with 5 padding zero-bits
-	printf("response[2] %d should be 128 \n", response[2]);
+	response[2] = (action << 6) | (function >> 2);
+	printf("response[2] %d should be 132 \n", response[2]);
+	response[3] = (function << 6) | (input_existence >> 2); // with 5 padding zero-bits
+	printf("response[3] %d should be 128 \n", response[3]);
 
 	// input existence boolean: if input exists, the bit is set to 1 and input couples <type,value> follow
 
 	//Put incremented access counter in message
-	get_access_counter_increment(response + 3);
+	get_access_counter_increment(response + 4);
 
 	//Get session key from storage
 	static uint8_t session_key[16];
@@ -712,8 +709,8 @@ send_access_request(void) {
 	compute_mac(session_key, response, message_length, response + message_length);
 
 	// Encrypt-and-MAC (E&M)
-	// Encrypt all bytes except the first (subject id) and the last 4 (MAC)
-	xcrypt_ctr(session_key, response + 1, sizeof(response) - 5);
+	// Encrypt all bytes except the first 2 (pseudonym) and the last 4 (MAC)
+	xcrypt_ctr(session_key, response + 2, sizeof(response) - 6);
 
 
 	//TODO nieuwe hmac/hash van alles, maar subject id niet encrypteren, anders heeft resource geen idee welke sleutel te gebruiken
