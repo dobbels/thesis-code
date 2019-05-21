@@ -214,7 +214,7 @@ process_ans_rep(const uint8_t *data,
         uint16_t datalen) {
 	const char * filename = "properties";
 	printf("HID_ANS_REP content:\n");
-	static uint8_t ans_rep[62];
+	static uint8_t ans_rep[64];
 	memcpy(ans_rep, data, datalen);
 	full_print_hex(ans_rep, sizeof(ans_rep));
 
@@ -275,6 +275,12 @@ process_ans_rep(const uint8_t *data,
 		} else {
 		   printf("Error: could not write Noncescm to storage.\n");
 		}
+
+		//Store pseudonym assigned to this subject
+		memcpy(pseudonym, ans_rep + encrypted_index + 34, 2);
+		printf("Received pseudonym: \n");
+		full_print_hex(pseudonym, 2);
+
 	} else {
 		printf("Error: unsecure response, nonce1 does not match.\n");
 	}
@@ -322,21 +328,18 @@ construct_cm_req(uint8_t *cm_req) {
 	  printf("Error: could not read ticket from storage.\n");
 	}
 	//Generate AuthNM and add to byte array
-	//IDs
-	cm_req[37] = 0;
-	cm_req[38] = subject_id;
+	//Pseudonym (2 bytes)
+	memcpy(cm_req + 37, pseudonym, 2);
 	//Noncescm + i, with i = 1
 	uint8_t i = 1;
 	fd_read = cfs_open(filename, CFS_READ);
 	if(fd_read!=-1) {
-	   cfs_seek(fd_read, noncescm_offset, CFS_SEEK_SET);
-	   cfs_read(fd_read, cm_req + 39, 8);
-	   cfs_close(fd_read);
-	 } else {
-	   printf("Error: could not read noncescm from storage.\n");
-	 }
-	printf("Decrypted HID_ANS_REP, Noncescm + i: \n");
-//	full_print_hex(cm_req + 39, 8);
+		cfs_seek(fd_read, noncescm_offset, CFS_SEEK_SET);
+		cfs_read(fd_read, cm_req + 39, 8);
+		cfs_close(fd_read);
+	} else {
+		printf("Error: could not read noncescm from storage.\n");
+	}
 	uint16_t temp = (cm_req[45]<< 8) | (cm_req[46]);
 	temp += i;
 	cm_req[45] = (temp >> 8) & 0xff;
@@ -374,92 +377,90 @@ process_cm_rep(const uint8_t *data,
 	memcpy(cm_rep, data, datalen);
 	full_print_hex(cm_rep, sizeof(cm_rep));
 
-	//Store pseudonym assigned to this subject
-	memcpy(pseudonym, cm_rep, 2);
-	printf("Received pseudonym: \n");
-	full_print_hex(pseudonym, 2);
+	//If valid id (=pseudonym)
+	if (memcmp(pseudonym, cm_rep, 2) == 0) {
+		printf("ticketR: \n");
+		full_print_hex(cm_rep + 2, 26);
 
-	printf("ticketR: \n");
-	full_print_hex(cm_rep + 2, 26);
+		printf("ticketR, bit 8: \n");
+		full_print_hex(cm_rep + 10, 1);
 
-	printf("ticketR, bit 8: \n");
-	full_print_hex(cm_rep + 10, 1);
+		// Store ticketR
+		int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+		if(fd_write != -1) {
+			int n = cfs_write(fd_write, cm_rep + 2, 26);
+			cfs_close(fd_write);
+			printf("Successfully written ticketR (%i bytes) to %s\n", n, filename);
+			printf("\n");
+		} else {
+		  printf("Error: could not write ticketR to storage.\n");
+		}
 
-	// Store ticketR
-	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, cm_rep + 2, 26);
-		cfs_close(fd_write);
-		printf("Successfully written ticketR (%i bytes) to %s\n", n, filename);
-		printf("\n");
-	} else {
-	  printf("Error: could not write ticketR to storage.\n");
-	}
+		// Get Kscm key from storage
+		static uint8_t kscm[16];
+		int fd_read = cfs_open(filename, CFS_READ);
+		if(fd_read!=-1) {
+			cfs_seek(fd_read, kscm_offset, CFS_SEEK_SET);
+			cfs_read(fd_read, kscm, 16);
+			cfs_close(fd_read);
+		} else {
+			printf("Error: could not read kscm from storage.\n");
+		}
 
-	// Get Kscm key from storage
-	static uint8_t kscm[16];
-	int fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		cfs_seek(fd_read, kscm_offset, CFS_SEEK_SET);
-		cfs_read(fd_read, kscm, 16);
-		cfs_close(fd_read);
-	} else {
-		printf("Error: could not read kscm from storage.\n");
-	}
+		// Decrypt last 34 bytes of message with Kscm
+		xcrypt_ctr(kscm, cm_rep + 28, 34);
 
-	// Decrypt last 34 bytes of message with Kscm
-	xcrypt_ctr(kscm, cm_rep + 28, 34);
+		// Get Nonce2 from storage
+		static uint8_t nonce2[8];
+		fd_read = cfs_open(filename, CFS_READ);
+		if(fd_read!=-1) {
+			cfs_seek(fd_read, nonce2_offset, CFS_SEEK_SET);
+			cfs_read(fd_read, nonce2, 8);
+			cfs_close(fd_read);
+		} else {
+			printf("Error: could not read Nonce2 from storage.\n");
+		}
 
-	// Get Nonce2 from storage
-	static uint8_t nonce2[8];
-	fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		cfs_seek(fd_read, nonce2_offset, CFS_SEEK_SET);
-		cfs_read(fd_read, nonce2, 8);
-		cfs_close(fd_read);
-	} else {
-		printf("Error: could not read Nonce2 from storage.\n");
-	}
+		// Check Nonce2 else return 0
+		if (memcmp(cm_rep + 52, nonce2, 8) != 0) {
+			printf("Error: not the Nonce2 that I sent in HID_CM_REQ.\n");
+			printf("From message\n");
+			full_print_hex(cm_rep + 52, 8);
+			printf("From storage\n");
+			full_print_hex(nonce2, 8);
+			return 0;
+		} else {
+			printf("Correct decryption of Nonce2 in HID_CM_REP.\n");
+			printf("\n");
+		}
 
-	// Check Nonce2 else return 0
-	if (memcmp(cm_rep + 52, nonce2, 8) != 0) {
-		printf("Error: not the Nonce2 that I sent in HID_CM_REQ.\n");
-		printf("From message\n");
-		full_print_hex(cm_rep + 52, 8);
-		printf("From storage\n");
-		full_print_hex(nonce2, 8);
-		return 0;
-	} else {
-		printf("Correct decryption of Nonce2 in HID_CM_REP.\n");
-		printf("\n");
-	}
+		printf("Ksr: \n");
+		full_print_hex(cm_rep + 28, 16);
 
-	printf("Ksr: \n");
-	full_print_hex(cm_rep + 28, 16);
+		// Store Ksr
+		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+		if(fd_write != -1) {
+			int n = cfs_write(fd_write, cm_rep + 28, 16);
+			cfs_close(fd_write);
+			printf("Successfully written Ksr (%i bytes) to %s\n", n, filename);
+			printf("\n");
+		} else {
+		  printf("Error: could not write Ksr to storage.\n");
+		}
 
-	// Store Ksr
-	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, cm_rep + 28, 16);
-		cfs_close(fd_write);
-		printf("Successfully written Ksr (%i bytes) to %s\n", n, filename);
-		printf("\n");
-	} else {
-	  printf("Error: could not write Ksr to storage.\n");
-	}
+		printf("nonceSR: \n");
+		full_print_hex(cm_rep + 44, 8);
 
-	printf("nonceSR: \n");
-	full_print_hex(cm_rep + 44, 8);
-
-	// Store Noncesr
-	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, cm_rep + 44, 8);
-		cfs_close(fd_write);
-		printf("Successfully written nonceSR (%i bytes) to %s\n", n, filename);
-		printf("\n");
-	} else {
-	  printf("Error: could not write nonceSR to storage.\n");
+		// Store Noncesr
+		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+		if(fd_write != -1) {
+			int n = cfs_write(fd_write, cm_rep + 44, 8);
+			cfs_close(fd_write);
+			printf("Successfully written nonceSR (%i bytes) to %s\n", n, filename);
+			printf("\n");
+		} else {
+		  printf("Error: could not write nonceSR to storage.\n");
+		}
 	}
 	return 1;
 }

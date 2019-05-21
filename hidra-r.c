@@ -45,6 +45,7 @@
 #define SUBJECT_UDP_PORT 1996
 
 #define MAX_NUMBER_OF_SUBJECTS 3
+#define hassaasn_test 2
 
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
 void compute_mac(uint8_t *key, const uint8_t *data, uint8_t datalen, uint8_t * final_digest);
