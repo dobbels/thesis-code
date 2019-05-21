@@ -5,6 +5,7 @@ all: $(CONTIKI_PROJECT)
 
 UIP_CONF_IPV6=1
 CFLAGS+= -DUIP_CONF_IPV6_RPL
+CFLAGS+= -DSICSLOWPAN_CONF_FRAG=0
 CFLAGS+= -Os
 CFLAGS += -ffunction-sections
 LDFLAGS += -Wl,--gc-sections,--undefined=_reset_vector__,--undefined=InterruptVectors,--undefined=_copy_data_init__,--undefined=_clear_bss_init__,--undefined=_end_of_init__
