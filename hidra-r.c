@@ -1062,9 +1062,11 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 {
 	if (datalen < 33) {
 		if (process_cm_ind_rep(data, datalen)) {
-			send_ack(c, sender_addr);
+//			send_ack(c, sender_addr);
 		} else {
-			send_nack(c, sender_addr);
+//			send_nack(c, sender_addr);
+			printf("Error: process_cm_ind_rep failed\n");
+
 		}
 
 
