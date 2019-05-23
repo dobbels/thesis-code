@@ -1,5 +1,3 @@
-#include "project-conf.h"
-
 #include "contiki.h"
 
 #include "lib/random.h"
@@ -30,6 +28,11 @@
 
 #include "encoded-policy.h"
 #include "bit-operations.h"
+
+// To print the IPv6 addresses in a friendlier way
+#include "debug.h"
+#define DEBUG DEBUG_PRINT
+#include "net/ip/uip-debug.h"
 
 #define SERVER_UDP_PORT 1234
 #define SUBJECT_UDP_PORT 1996
@@ -283,7 +286,7 @@ send_access_nack(struct simple_udp_connection *c,
 static void
 send_access_ack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
-		uint8_t * subject_id)
+		uint8_t subject_id)
 {
 	printf("Sending ACK to \n");
 
@@ -589,26 +592,29 @@ handle_subject_access_request(const uint8_t *data,
 		printf("Error: retrieving session key");
 	}
 
+	uint8_t message[datalen];
+	memcpy(message, data, datalen);
+
 	// Encrypt-and-MAC (E&M) => Decrypt-and-MAC
-	xcrypt_ctr(session_key, data + 2, datalen - 6);
+	xcrypt_ctr(session_key, message + 2, datalen - 6);
 
 	uint8_t mac[4];
-	compute_mac(session_key, data, datalen - 4, mac);
+	compute_mac(session_key, message, datalen - 4, mac);
 
-	if (memcmp(data + datalen - 4, mac, 4) == 0) {
+	if (memcmp(message + datalen - 4, mac, 4) == 0) {
 
 		int bit_index = 16;
-		uint8_t action = get_bits_between(bit_index, bit_index + 2, data);
+		uint8_t action = get_bits_between(bit_index, bit_index + 2, message);
 		bit_index += 2;
-		uint8_t function = get_char_from(bit_index, data);
+		uint8_t function = get_char_from(bit_index, message);
 		bit_index += 8;
 
-		if (get_bit(bit_index, data)){
+		if (get_bit(bit_index, message)){
 			printf("Error: This demo does not expect any inputs\n");
 		}
 
-		if (new_nonce_is_greater_than_counter(sub_id, data + 4)) {
-			store_access_counter(sub_id, data + 4);
+		if (new_nonce_is_greater_than_counter(sub_id, message + 4)) {
+			store_access_counter(sub_id, message + 4);
 
 			// print request (if it is the expected demo request)
 			if (action == 2 && function == 18) {

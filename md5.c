@@ -19,7 +19,7 @@ uint32_t h0, h1, h2, h3;
  */
 void md5(uint8_t * digest, uint8_t *initial_msg, size_t initial_len) {
 
-	printf("Check one-way chain.\n");
+	//printf("Check one-way chain.\n");
 
     // Note: All variables are unsigned 32 bit and wrap modulo 2^32 when calculating
 

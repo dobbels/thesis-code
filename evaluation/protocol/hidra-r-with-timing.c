@@ -29,6 +29,16 @@
 #include "../../encoded-policy.h"
 #include "../../bit-operations.h"
 
+// To print the IPv6 addresses in a friendlier way
+#include "debug.h"
+#define DEBUG DEBUG_PRINT
+#include "net/ip/uip-debug.h"
+
+#include "rtimer.h"
+//#include "sys/energest.h"
+
+unsigned long timestamp;
+
 #define SERVER_UDP_PORT 1234
 #define SUBJECT_UDP_PORT 1996
 
@@ -277,7 +287,7 @@ send_access_nack(struct simple_udp_connection *c,
 static void
 send_access_ack(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
-		uint8_t * subject_id)
+		uint8_t subject_id)
 {
 	//printf("Sending ACK to \n");
 
@@ -583,32 +593,35 @@ handle_subject_access_request(const uint8_t *data,
 		printf("Error: retrieving session key");
 	}
 
+	uint8_t message[datalen];
+	memcpy(message, data, datalen);
+
 	// Encrypt-and-MAC (E&M) => Decrypt-and-MAC
-	xcrypt_ctr(session_key, data + 2, datalen - 6);
+	xcrypt_ctr(session_key, message + 2, datalen - 6);
 
 	uint8_t mac[4];
-	compute_mac(session_key, data, datalen - 4, mac);
+	compute_mac(session_key, message, datalen - 4, mac);
 
-	if (memcmp(data + datalen - 4, mac, 4) == 0) {
+	if (memcmp(message + datalen - 4, mac, 4) == 0) {
 
 		int bit_index = 16;
-		uint8_t action = get_bits_between(bit_index, bit_index + 2, data);
+		uint8_t action = get_bits_between(bit_index, bit_index + 2, message);
 		bit_index += 2;
-		uint8_t function = get_char_from(bit_index, data);
+		uint8_t function = get_char_from(bit_index, message);
 		bit_index += 8;
 
-		if (get_bit(bit_index, data)){
+		if (get_bit(bit_index, message)){
 			printf("Error: This demo does not expect any inputs\n");
 		}
 
-		if (new_nonce_is_greater_than_counter(sub_id, data + 4)) {
-			store_access_counter(sub_id, data + 4);
+		if (new_nonce_is_greater_than_counter(sub_id, message + 4)) {
+			store_access_counter(sub_id, message + 4);
 
 			// print request (if it is the expected demo request)
 			if (action == 2 && function == 18) {
-				//printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
+				printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
 			} else if (action == 2 && function == 19) {
-				//printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
+				printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
 			} else {
 				printf("Did not receive the expected demo-request.\n");
 				return 0;
@@ -818,12 +831,15 @@ receiver_subject(struct simple_udp_connection *c,
 	full_print_hex(data, datalen);
 	// Rough demo separator between access request and key establishment request
 	if (datalen > 20) {
-		//TODO handle response
+		printf("wait for s_r_req: %4lu ticks\n", clock_time() - timestamp);
+		timestamp = clock_time();
 		uint8_t result = process_s_r_req(c, sender_addr, data, datalen);
 		if (!result) {
 			send_nack(c, sender_addr);
 		}
+		printf("process s_r_req, send s_r_rep: %4lu ticks\n", clock_time() - timestamp);
 	} else {
+		timestamp = clock_time();
 		uint8_t subject_id = data[1];
 		if (hid_s_r_req_success(subject_id) && fresh_information(subject_id)) {
 			uint8_t result = handle_subject_access_request(data, datalen, subject_id);
@@ -838,6 +854,7 @@ receiver_subject(struct simple_udp_connection *c,
 			printf("Request denied, because no association with this subject exists.\n");
 			send_nack(c, sender_addr);
 		}
+		printf("process access request: %4lu ticks\n", clock_time() - timestamp);
 	}
 }
 
@@ -1049,12 +1066,15 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
         uint16_t datalen)
 {
 	if (datalen < 33) {
+		printf("travel + cm_ind_rep + travel: %4lu ticks\n", clock_time() - timestamp);
+		timestamp = clock_time();
 		if (process_cm_ind_rep(data, datalen)) {
-			send_ack(c, sender_addr);
+//			send_ack(c, sender_addr);
 		} else {
-			send_nack(c, sender_addr);
+//			send_nack(c, sender_addr);
 		}
-
+		printf("cm_ind_rep processing: %4lu ticks\n", clock_time() - timestamp);
+		timestamp = clock_time();
 
 		//Clean up for next demo association (as it is at the moment)
 		any_previous_key_chain_value_stored = 0;
@@ -1070,12 +1090,15 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 
 	// If this is the first exchange with the ACS: extract subject id and policy
 	if (!is_already_associated(subject_id)) {
+		timestamp = clock_time();
 		if (process_cm_ind(subject_id, data, datalen)) {
 			//Request previous key chain value at credential manager
 			static uint8_t response[14];
 			construct_cm_ind_req(response);
 			//Send message to credential manager
 			simple_udp_sendto(c, response, sizeof(response), sender_addr);
+			printf("cm_ind procession + cm_ind_req construction: %4lu ticks\n", clock_time() - timestamp);
+			timestamp = clock_time();
 		} else {
 			set_fresh_information(subject_id, 1);
 			printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
