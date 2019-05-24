@@ -17,7 +17,63 @@
 #include "../../bit-operations.h"
 
 #include "rtimer.h"
-//#include "sys/energest.h"
+#include "sys/energest.h"
+
+#define ENERGEST_SECOND RTIMER_ARCH_SECOND
+
+#ifndef ENERGEST_GET_TOTAL_TIME
+#ifdef ENERGEST_CONF_GET_TOTAL_TIME
+#define ENERGEST_GET_TOTAL_TIME ENERGEST_CONF_GET_TOTAL_TIME
+#else /* ENERGEST_CONF_GET_TOTAL_TIME */
+#define ENERGEST_GET_TOTAL_TIME energest_get_total_time
+#endif /* ENERGEST_CONF_GET_TOTAL_TIME */
+#endif /* ENERGEST_GET_TOTAL_TIME */
+
+uint64_t ENERGEST_GET_TOTAL_TIME(void);
+
+uint64_t
+energest_get_total_time(void)
+{
+  return energest_type_time(ENERGEST_TYPE_CPU) +
+    energest_type_time(ENERGEST_TYPE_LPM);
+}
+
+static inline unsigned long
+to_seconds(uint64_t time)
+{
+  return (unsigned long)(time / ENERGEST_SECOND);
+}
+
+void
+print_energest_data(void) {
+	/*
+	 * Update all energest times. Should always be called before energest
+	 * times are read.
+	 */
+	energest_flush();
+
+	printf("\nEnergest:\n");
+	printf(" CPU          %4lu ticks LPM      %4lu ticks Total ticks %lu \n",
+			   energest_type_time(ENERGEST_TYPE_CPU),
+			   energest_type_time(ENERGEST_TYPE_LPM),
+			   ENERGEST_GET_TOTAL_TIME());
+		printf(" Radio LISTEN %4lu ticks TRANSMIT %4lu ticks OFF      %4lu ticks\n",
+			   energest_type_time(ENERGEST_TYPE_LISTEN),
+			   energest_type_time(ENERGEST_TYPE_TRANSMIT),
+			   ENERGEST_GET_TOTAL_TIME()
+						  - energest_type_time(ENERGEST_TYPE_TRANSMIT)
+						  - energest_type_time(ENERGEST_TYPE_LISTEN));
+//	printf(" CPU          %4lus LPM      %4lus Total time %lus\n",
+//		   to_seconds(energest_type_time(ENERGEST_TYPE_CPU)),
+//		   to_seconds(energest_type_time(ENERGEST_TYPE_LPM)),
+//		   to_seconds(ENERGEST_GET_TOTAL_TIME()));
+//	printf(" Radio LISTEN %4lus TRANSMIT %4lus OFF      %4lus\n",
+//		   to_seconds(energest_type_time(ENERGEST_TYPE_LISTEN)),
+//		   to_seconds(energest_type_time(ENERGEST_TYPE_TRANSMIT)),
+//		   to_seconds(ENERGEST_GET_TOTAL_TIME()
+//					  - energest_type_time(ENERGEST_TYPE_TRANSMIT)
+//					  - energest_type_time(ENERGEST_TYPE_LISTEN)));
+}
 
 unsigned long initial_timestamp;
 unsigned long timestamp;
@@ -135,8 +191,8 @@ receiver_resource(struct simple_udp_connection *c,
 	}
 
 	if (datalen == 32) {
-		printf("s_r_req -> s_r_rep: %4lu ticks\n", clock_time() - timestamp);
-		timestamp = clock_time();
+//		printf("s_r_req -> s_r_rep: %4lu ticks\n", clock_time() - timestamp);
+//		timestamp = clock_time();
 		static uint8_t s_r_rep[32];
 		memcpy(s_r_rep, data, sizeof(s_r_rep));
 
@@ -182,10 +238,11 @@ receiver_resource(struct simple_udp_connection *c,
 				}
 				security_association_established = 1;
 //				printf("End of Successful Hidra Exchange.\n");
-				unsigned long last_duration = clock_time() - timestamp;
+//				unsigned long last_duration = clock_time() - timestamp;
 				unsigned long duration = clock_time() - initial_timestamp;
-				printf("s_r_req reception: %4lu ticks\n", clock_time() - timestamp);
+//				printf("s_r_req reception: %4lu ticks\n", clock_time() - timestamp);
 				printf("It took %4lu ticks to complete the protocol\n", duration);
+				print_energest_data();
 //				unsigned long r_duration = RTIMER_NOW() - r_timestamp;
 //				printf("That means about %4lu milliseconds \n", duration*7813/1000);
 //				printf("That means about %4lu milliseconds \n", (r_duration<<)/RTIMER_ARCH_SECOND);
@@ -197,15 +254,15 @@ receiver_resource(struct simple_udp_connection *c,
 			printf("Wrong NonceSR HID_S_R_REP.\n");
 		}
 	} else if (datalen == 3) {
-		printf("access request response: %4lu ticks\n", clock_time() - timestamp);
-		timestamp = clock_time();
+//		printf("access request response: %4lu ticks\n", clock_time() - timestamp);
+//		timestamp = clock_time();
 		uint8_t access_response[3];
 		memcpy(access_response, data, sizeof(access_response));
 		xcrypt_ctr(session_key, access_response, sizeof(access_response));
 		if (nonce_equals(access_counter+1, access_response + 1)) {
 			store_access_counter(access_response + 1);
 			//printf("access_response[0]: %d\n", access_response[0]);
-			printf("processed_response: %4lu ticks\n", clock_time() - timestamp);
+//			printf("processed_response: %4lu ticks\n", clock_time() - timestamp);
 			if(access_response[0]){
 				//printf("Received Acknowledge.\n");
 			} else {
@@ -597,8 +654,8 @@ receiver_server(struct simple_udp_connection *c,
 {
 	if (authentication_requested) {
 		if (!credentials_requested) {
-			printf("ans_ -> ans_rep: %4lu ticks\n", clock_time() - timestamp);
-			timestamp = clock_time();
+//			printf("ans_ -> ans_rep: %4lu ticks\n", clock_time() - timestamp);
+//			timestamp = clock_time();
 			// Perform phase 2
 			if(datalen != 64) {
 				printf("Error: different length of HID_ANS_REP packet: %d\n", datalen);
@@ -614,14 +671,14 @@ receiver_server(struct simple_udp_connection *c,
 				simple_udp_sendto(&unicast_connection_server, response, sizeof(response), &server_addr);
 				//printf("Sent HID_CM_REQ\n");
 				credentials_requested = 1;
-				printf("ans_rep -> cm_req: %4lu ticks\n", clock_time() - timestamp);
-				timestamp = clock_time();
+//				printf("ans_rep -> cm_req: %4lu ticks\n", clock_time() - timestamp);
+//				timestamp = clock_time();
 			} else {
 				printf("Error: wrong subject id %d\n", get_char_from(8, data));
 			}
 		} else {
-			printf("cm_req -> cm_rep: %4lu ticks\n", clock_time() - timestamp);
-			timestamp = clock_time();
+//			printf("cm_req -> cm_rep: %4lu ticks\n", clock_time() - timestamp);
+//			timestamp = clock_time();
 			//Receive last step in phase 2
 			if (process_cm_rep(data, datalen) != 0) {
 				//Perform phase 3 exchange with resource
@@ -630,8 +687,8 @@ receiver_server(struct simple_udp_connection *c,
 				//Send message to credential manager
 				simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
 				//printf("Sent HID_S_R_REQ\n");
-				printf("cm_rep -> s_r_req: %4lu ticks\n", clock_time() - timestamp);
-				timestamp = clock_time();
+//				printf("cm_rep -> s_r_req: %4lu ticks\n", clock_time() - timestamp);
+//				timestamp = clock_time();
 			} else {
 				printf("Error while processing HID_CM_REP\n");
 			}
@@ -643,13 +700,16 @@ receiver_server(struct simple_udp_connection *c,
 
 static void
 start_hidra_protocol(void) {
-	timestamp = clock_time();
+
+	print_energest_data();
+
+//	timestamp = clock_time();
 
 	static uint8_t ans_request[15];
 	const char *filename = "properties";
 
 	initial_timestamp = clock_time();
-	r_timestamp = RTIMER_NOW();
+//	r_timestamp = RTIMER_NOW();
 
 	// IdS (2 bytes)
 	ans_request[0] = 0;
@@ -694,13 +754,13 @@ start_hidra_protocol(void) {
 	simple_udp_sendto(&unicast_connection_server, ans_request, sizeof(ans_request), &server_addr);
 	authentication_requested = 1;
 
-	printf("hid_req: %4lu ticks\n", clock_time() - timestamp);
-	timestamp = clock_time();
+//	printf("hid_req: %4lu ticks\n", clock_time() - timestamp);
+//	timestamp = clock_time();
 }
 
 static void
 send_access_request(void) {
-	timestamp = clock_time();
+//	timestamp = clock_time();
 
 	uint8_t message_length = 7;
 	uint8_t response[message_length + 4];
@@ -744,8 +804,8 @@ send_access_request(void) {
 	simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
 	resource_access_requested = 1;
 
-	printf("construct access_request: %4lu ticks\n", clock_time() - timestamp);
-	timestamp = clock_time();
+//	printf("construct access_request: %4lu ticks\n", clock_time() - timestamp);
+//	timestamp = clock_time();
 }
 
 static void
@@ -856,6 +916,7 @@ PROCESS_THREAD(hidra_subject, ev, data)
 				printf("clock_time(), i.e. ticks: %4lu\n", clock_time());//return unsigned long
 				printf("clock_seconds: %4lus\n", clock_seconds());
 				printf("RTIMER_ARCH_SECOND: %4lu ticks\n", RTIMER_ARCH_SECOND);
+				printf("RTIMER_SECOND: %4lu ticks\n", RTIMER_SECOND);
 				printf("CLOCK_SECOND: %4lu ticks\n", CLOCK_SECOND);
 			}
 

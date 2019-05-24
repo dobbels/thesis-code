@@ -35,8 +35,65 @@
 #include "net/ip/uip-debug.h"
 
 #include "rtimer.h"
-//#include "sys/energest.h"
+#include "sys/energest.h"
 
+#define ENERGEST_SECOND RTIMER_ARCH_SECOND
+
+#ifndef ENERGEST_GET_TOTAL_TIME
+#ifdef ENERGEST_CONF_GET_TOTAL_TIME
+#define ENERGEST_GET_TOTAL_TIME ENERGEST_CONF_GET_TOTAL_TIME
+#else /* ENERGEST_CONF_GET_TOTAL_TIME */
+#define ENERGEST_GET_TOTAL_TIME energest_get_total_time
+#endif /* ENERGEST_CONF_GET_TOTAL_TIME */
+#endif /* ENERGEST_GET_TOTAL_TIME */
+
+uint64_t ENERGEST_GET_TOTAL_TIME(void);
+
+uint64_t
+energest_get_total_time(void)
+{
+  return energest_type_time(ENERGEST_TYPE_CPU) +
+    energest_type_time(ENERGEST_TYPE_LPM);
+}
+
+static inline unsigned long
+to_seconds(uint64_t time)
+{
+  return (unsigned long)(time / ENERGEST_SECOND);
+}
+
+void
+print_energest_data(void) {
+	/*
+	 * Update all energest times. Should always be called before energest
+	 * times are read.
+	 */
+	energest_flush();
+
+	printf("\nEnergest:\n");
+	printf(" CPU          %4lu ticks LPM      %4lu ticks Total ticks %lu \n",
+			   energest_type_time(ENERGEST_TYPE_CPU),
+			   energest_type_time(ENERGEST_TYPE_LPM),
+			   ENERGEST_GET_TOTAL_TIME());
+		printf(" Radio LISTEN %4lu ticks TRANSMIT %4lu ticks OFF      %4lu ticks\n",
+			   energest_type_time(ENERGEST_TYPE_LISTEN),
+			   energest_type_time(ENERGEST_TYPE_TRANSMIT),
+			   ENERGEST_GET_TOTAL_TIME()
+						  - energest_type_time(ENERGEST_TYPE_TRANSMIT)
+						  - energest_type_time(ENERGEST_TYPE_LISTEN));
+//	printf(" CPU          %4lus LPM      %4lus Total time %lus\n",
+//		   to_seconds(energest_type_time(ENERGEST_TYPE_CPU)),
+//		   to_seconds(energest_type_time(ENERGEST_TYPE_LPM)),
+//		   to_seconds(ENERGEST_GET_TOTAL_TIME()));
+//	printf(" Radio LISTEN %4lus TRANSMIT %4lus OFF      %4lus\n",
+//		   to_seconds(energest_type_time(ENERGEST_TYPE_LISTEN)),
+//		   to_seconds(energest_type_time(ENERGEST_TYPE_TRANSMIT)),
+//		   to_seconds(ENERGEST_GET_TOTAL_TIME()
+//					  - energest_type_time(ENERGEST_TYPE_TRANSMIT)
+//					  - energest_type_time(ENERGEST_TYPE_LISTEN)));
+}
+
+unsigned long eval_timestamp;
 unsigned long timestamp;
 
 #define SERVER_UDP_PORT 1234
@@ -639,6 +696,9 @@ handle_subject_access_request(const uint8_t *data,
 				}
 			}
 			if (exists) {
+
+//				eval_timestamp = RTIMER_NOW();
+
 				// Assumption for demo purposes: 1 single rule inside the policy
 				char rule_checks_out = 0;
 
@@ -680,6 +740,9 @@ handle_subject_access_request(const uint8_t *data,
 						}
 					}
 				}
+
+//				eval_timestamp = RTIMER_NOW() - eval_timestamp;
+//				printf("Evaluation time: %4lu rtimer ticks\n", eval_timestamp);
 
 				// Possibly perform operation and (non)acknowledge the subject
 				if (rule_checks_out) {
@@ -812,6 +875,7 @@ process_s_r_req(struct simple_udp_connection *c,
 
 		// send this message
 		simple_udp_sendto(c, s_r_rep, 32, sender_addr);
+		print_energest_data();
 		return 1;
 	} else {
 		return 0;
@@ -831,15 +895,15 @@ receiver_subject(struct simple_udp_connection *c,
 	full_print_hex(data, datalen);
 	// Rough demo separator between access request and key establishment request
 	if (datalen > 20) {
-		printf("wait for s_r_req: %4lu ticks\n", clock_time() - timestamp);
-		timestamp = clock_time();
+//		printf("wait for s_r_req: %4lu ticks\n", clock_time() - timestamp);
+//		timestamp = clock_time();
 		uint8_t result = process_s_r_req(c, sender_addr, data, datalen);
 		if (!result) {
 			send_nack(c, sender_addr);
 		}
-		printf("process s_r_req, send s_r_rep: %4lu ticks\n", clock_time() - timestamp);
+//		printf("process s_r_req, send s_r_rep: %4lu ticks\n", clock_time() - timestamp);
 	} else {
-		timestamp = clock_time();
+//		timestamp = clock_time();
 		uint8_t subject_id = data[1];
 		if (hid_s_r_req_success(subject_id) && fresh_information(subject_id)) {
 			uint8_t result = handle_subject_access_request(data, datalen, subject_id);
@@ -854,7 +918,7 @@ receiver_subject(struct simple_udp_connection *c,
 			printf("Request denied, because no association with this subject exists.\n");
 			send_nack(c, sender_addr);
 		}
-		printf("process access request: %4lu ticks\n", clock_time() - timestamp);
+//		printf("process access request: %4lu ticks\n", clock_time() - timestamp);
 	}
 }
 
@@ -1066,16 +1130,16 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
         uint16_t datalen)
 {
 	if (datalen < 33) {
-		printf("travel + cm_ind_rep + travel: %4lu ticks\n", clock_time() - timestamp);
-		timestamp = clock_time();
+//		printf("travel + cm_ind_rep + travel: %4lu ticks\n", clock_time() - timestamp);
+//		timestamp = clock_time();
 		if (process_cm_ind_rep(data, datalen)) {
 //			send_ack(c, sender_addr);
 		} else {
 //			send_nack(c, sender_addr);
 			printf("Error: process_cm_ind_rep failed\n");
 		}
-		printf("cm_ind_rep processing: %4lu ticks\n", clock_time() - timestamp);
-		timestamp = clock_time();
+//		printf("cm_ind_rep processing: %4lu ticks\n", clock_time() - timestamp);
+//		timestamp = clock_time();
 
 		//Clean up for next demo association (as it is at the moment)
 		any_previous_key_chain_value_stored = 0;
@@ -1091,15 +1155,16 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 
 	// If this is the first exchange with the ACS: extract subject id and policy
 	if (!is_already_associated(subject_id)) {
-		timestamp = clock_time();
+//		timestamp = clock_time();
+		print_energest_data();
 		if (process_cm_ind(subject_id, data, datalen)) {
 			//Request previous key chain value at credential manager
 			static uint8_t response[14];
 			construct_cm_ind_req(response);
 			//Send message to credential manager
 			simple_udp_sendto(c, response, sizeof(response), sender_addr);
-			printf("cm_ind procession + cm_ind_req construction: %4lu ticks\n", clock_time() - timestamp);
-			timestamp = clock_time();
+//			printf("cm_ind procession + cm_ind_req construction: %4lu ticks\n", clock_time() - timestamp);
+//			timestamp = clock_time();
 		} else {
 			set_fresh_information(subject_id, 1);
 			printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
