@@ -66,6 +66,7 @@ get_bits_between(int start_index, int end_index, const uint8_t *data) {
 
 uint8_t
 get_bit(int index, const uint8_t *data) {
+//	return !!(data[((index) / 8)] & (  1 << (7 - ((index) % 8) )));
 	return get_bits_between(index, index+1, data);
 }
 

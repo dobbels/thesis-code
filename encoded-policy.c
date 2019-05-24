@@ -191,6 +191,10 @@ expression_increase_index(uint8_t *data, int bit_index)
 
 }
 
+//#define SET_BIT_BUFFER(bb, index)   bb[((index) / 8)] |= (  1 << ( 7 - ((index) % 8) ))
+//#define CLEAR_BIT_BUFFER(bb, index) bb[((index) / 8)] &= (~(1 << ( 7 - ((index) % 8) )))
+//#define ASSIGN_BIT_BUFFER(bb, index, v) { if (v) { SET_BIT_BUFFER((bb), index); } else { CLEAR_BIT_BUFFER((bb), index); } }
+
 int
 task_increase_index(const uint8_t *data, int bit_index)
 {

@@ -1,4 +1,4 @@
-CONTIKI_PROJECT = hidra-r-with-timing
+CONTIKI_PROJECT = subject-with-timing
 all: $(CONTIKI_PROJECT)
 
 UIP_CONF_IPV6=1

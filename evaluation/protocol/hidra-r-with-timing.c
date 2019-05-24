@@ -70,7 +70,7 @@ print_energest_data(void) {
 	 */
 	energest_flush();
 
-	printf("\nEnergest:\n");
+	printf("\nEnergest resource:\n");
 	printf(" CPU          %4lu ticks LPM      %4lu ticks Total ticks %lu \n",
 			   energest_type_time(ENERGEST_TYPE_CPU),
 			   energest_type_time(ENERGEST_TYPE_LPM),
@@ -875,7 +875,7 @@ process_s_r_req(struct simple_udp_connection *c,
 
 		// send this message
 		simple_udp_sendto(c, s_r_rep, 32, sender_addr);
-		print_energest_data();
+//		print_energest_data();
 		return 1;
 	} else {
 		return 0;
@@ -1145,7 +1145,7 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 		any_previous_key_chain_value_stored = 0;
 		const char * filename = "properties";
 		cfs_remove(filename);
-		printf("\n");
+//		printf("\n");
 		printf("End of Hidra exchange with ACS\n");
 		return 1;
 	}
@@ -1156,7 +1156,7 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 	// If this is the first exchange with the ACS: extract subject id and policy
 	if (!is_already_associated(subject_id)) {
 //		timestamp = clock_time();
-		print_energest_data();
+//		print_energest_data();
 		if (process_cm_ind(subject_id, data, datalen)) {
 			//Request previous key chain value at credential manager
 			static uint8_t response[14];

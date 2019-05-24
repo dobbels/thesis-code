@@ -18,11 +18,6 @@ struct associated_subject {
 	uint16_t access_counter;
 };
 
-struct policy {
-	// Assumption for the demo: policies are not larger than 10 bytes
-	uint8_t content[10];
-};
-
 uint8_t blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id);
 
 uint8_t policy_has_at_least_one_rule(uint8_t *policy);

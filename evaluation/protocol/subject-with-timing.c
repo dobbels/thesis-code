@@ -52,7 +52,7 @@ print_energest_data(void) {
 	 */
 	energest_flush();
 
-	printf("\nEnergest:\n");
+	printf("\nEnergest subject:\n");
 	printf(" CPU          %4lu ticks LPM      %4lu ticks Total ticks %lu \n",
 			   energest_type_time(ENERGEST_TYPE_CPU),
 			   energest_type_time(ENERGEST_TYPE_LPM),
@@ -239,10 +239,10 @@ receiver_resource(struct simple_udp_connection *c,
 				security_association_established = 1;
 //				printf("End of Successful Hidra Exchange.\n");
 //				unsigned long last_duration = clock_time() - timestamp;
-				unsigned long duration = clock_time() - initial_timestamp;
+//				unsigned long duration = clock_time() - initial_timestamp;
 //				printf("s_r_req reception: %4lu ticks\n", clock_time() - timestamp);
-				printf("It took %4lu ticks to complete the protocol\n", duration);
-				print_energest_data();
+//				printf("It took %4lu ticks to complete the protocol\n", duration);
+//				print_energest_data();
 //				unsigned long r_duration = RTIMER_NOW() - r_timestamp;
 //				printf("That means about %4lu milliseconds \n", duration*7813/1000);
 //				printf("That means about %4lu milliseconds \n", (r_duration<<)/RTIMER_ARCH_SECOND);
@@ -701,14 +701,15 @@ receiver_server(struct simple_udp_connection *c,
 static void
 start_hidra_protocol(void) {
 
-	print_energest_data();
+//	print_energest_data();
 
 //	timestamp = clock_time();
+
+//	initial_timestamp = clock_time();
 
 	static uint8_t ans_request[15];
 	const char *filename = "properties";
 
-	initial_timestamp = clock_time();
 //	r_timestamp = RTIMER_NOW();
 
 	// IdS (2 bytes)
@@ -845,10 +846,23 @@ set_global_address(void)
 
 PROCESS_THREAD(hidra_subject, ev, data)
 {
+	static struct etimer periodic_timer;
+
 	PROCESS_BEGIN();
 
+//	print_energest_data();
+
 	SENSORS_ACTIVATE(button_sensor);
+
 	clock_init();
+
+//	static int i = 4;
+//	etimer_set(&periodic_timer, CLOCK_SECOND * 2);
+//	while(i--) {
+//		print_energest_data();
+//		PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
+//		etimer_reset(&periodic_timer);
+//	}
 //	random_init();
 
 	//use global address to deduce node-id
@@ -891,6 +905,7 @@ PROCESS_THREAD(hidra_subject, ev, data)
 	//Nonce4
 	nonce4_offset = subkey_offset + 16;
 
+
 	uint8_t testing = 0;
 	while(1) {
 		PROCESS_WAIT_EVENT();
@@ -913,11 +928,11 @@ PROCESS_THREAD(hidra_subject, ev, data)
 
 		if ((ev==sensors_event) && (data == &button_sensor)) {
 			if (testing) {
-				printf("clock_time(), i.e. ticks: %4lu\n", clock_time());//return unsigned long
-				printf("clock_seconds: %4lus\n", clock_seconds());
-				printf("RTIMER_ARCH_SECOND: %4lu ticks\n", RTIMER_ARCH_SECOND);
-				printf("RTIMER_SECOND: %4lu ticks\n", RTIMER_SECOND);
-				printf("CLOCK_SECOND: %4lu ticks\n", CLOCK_SECOND);
+//				printf("clock_time(), i.e. ticks: %4lu\n", clock_time());//return unsigned long
+//				printf("clock_seconds: %4lus\n", clock_seconds());
+//				printf("RTIMER_ARCH_SECOND: %4lu ticks\n", RTIMER_ARCH_SECOND);
+//				printf("RTIMER_SECOND: %4lu ticks\n", RTIMER_SECOND);
+//				printf("CLOCK_SECOND: %4lu ticks\n", CLOCK_SECOND);
 			}
 
 			else if (!security_association_established) {
