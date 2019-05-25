@@ -200,10 +200,6 @@ unpack_expression(const uint8_t *data, int bit_index, struct expression *exp)
 int
 unpack_obligation(const uint8_t *data, int bit_index, struct obligation *obl)
 {
-//	struct task task;
-	//No malloc needed, struct task is allocated together with obligation
-	bit_index = unpack_task(data, bit_index, &obl->task);
-//	uint8_t fulfill_on : 2; // a value of 0 : on deny, 1 : on permit, 2 : 'always execute', 3 : undefined
 	if (get_bit(bit_index, data)) {
 		bit_index += 1;
 		obl->fulfill_on = get_bit(bit_index, data);
@@ -216,6 +212,11 @@ unpack_obligation(const uint8_t *data, int bit_index, struct obligation *obl)
 
 	printf("\n");
 	printf("obl->fulfill_on : %d\n", obl->fulfill_on);
+//	struct task task;
+	//No malloc needed, struct task is allocated together with obligation
+	bit_index = unpack_task(data, bit_index, &obl->task);
+//	uint8_t fulfill_on : 2; // a value of 0 : on deny, 1 : on permit, 2 : 'always execute', 3 : undefined
+
 	return bit_index;
 }
 /*---------------------------------------------------------------------------*/

@@ -9,6 +9,8 @@ uint8_t get_bit(int index, const uint8_t *data);
 
 uint8_t get_3_bits_from(int index, const uint8_t *data);
 
+uint8_t get_2_bits_from(int index, const uint8_t *data);
+
 uint8_t get_char_from(int index, const uint8_t *data);
 
 int16_t get_int16_from(int index, const uint8_t *data);

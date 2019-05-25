@@ -662,7 +662,7 @@ handle_subject_access_request(const uint8_t *data,
 	if (memcmp(message + datalen - 4, mac, 4) == 0) {
 
 		int bit_index = 16;
-		uint8_t action = get_bits_between(bit_index, bit_index + 2, message);
+		uint8_t action = get_2_bits_from(bit_index, message);
 		bit_index += 2;
 		uint8_t function = get_char_from(bit_index, message);
 		bit_index += 8;

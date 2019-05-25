@@ -77,7 +77,7 @@ rule_get_action(uint8_t *policy, int bit_index) {
 uint8_t
 obligation_has_fulfill_on(uint8_t *policy, int bit_index) {
 	//Skip past task
-	bit_index = task_increase_index(policy, bit_index);
+//	bit_index = task_increase_index(policy, bit_index);
 	return (get_bit(bit_index, policy));
 }
 
@@ -85,7 +85,7 @@ obligation_has_fulfill_on(uint8_t *policy, int bit_index) {
 uint8_t
 obligation_get_fulfill_on(uint8_t *policy, int bit_index) {
 	//Skip past task
-	bit_index = task_increase_index(policy, bit_index);
+//	bit_index = task_increase_index(policy, bit_index);
 	return (get_bit(bit_index+1, policy));
 }
 
@@ -398,8 +398,6 @@ print_expression(const uint8_t *data, int bit_index)
 int
 print_obligation(const uint8_t *data, int bit_index)
 {
-	bit_index = print_task(data, bit_index);
-
 	printf("obl->fulfill_on_existence_mask : %d\n", get_bit(bit_index, data));
 	if (get_bit(bit_index, data)) {
 		bit_index += 1;
@@ -408,6 +406,8 @@ print_obligation(const uint8_t *data, int bit_index)
 	} else {
 		bit_index += 1;
 	}
+
+	bit_index = print_task(data, bit_index);
 	return bit_index;
 }
 /*---------------------------------------------------------------------------*/
