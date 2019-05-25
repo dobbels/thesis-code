@@ -37,6 +37,12 @@ unsigned long timestamp;
 
 #define MAX_NUMBER_OF_SUBJECTS 3
 
+
+
+//#define get_bit(index,data) !!(data[((index) / 8)] & (  1 << (7 - ((index) % 8) )))
+
+
+
 static struct simple_udp_connection unicast_connection_server;
 static struct simple_udp_connection unicast_connection_subject;
 
@@ -470,15 +476,11 @@ evaluate_compressed_policy(const uint8_t *data, uint16_t datalen) {
 	char all_rules_check_out = 1;
 	char result_of_this_rule = 1; // to be able to decide whether to execute an obligation
 
-	struct associated_subject current_sub;
-
-	memcpy(current_sub.policy, data, datalen);
-
 	timestamp = RTIMER_NOW();
 
 	// Search for rule about action PUT. TODO include action=ANY and rule without an action specified
-	if (!get_bit(9, current_sub.policy)) {
-		all_rules_check_out = get_policy_effect(current_sub.policy);
+	if (!get_bit(9, data)) {
+		all_rules_check_out = get_policy_effect(data);
 	} else {
 
 		int current_rule_bit_index = 10;
@@ -486,9 +488,9 @@ evaluate_compressed_policy(const uint8_t *data, uint16_t datalen) {
 		uint8_t nb_of_rules = get_3_bits_from(current_rule_bit_index, data);
 		current_rule_bit_index += 3;
 		for (; rule_index < nb_of_rules + 1; rule_index++) {
-			if (!rule_has_action(current_sub.policy, current_rule_bit_index) ||
-					(rule_has_action(current_sub.policy, current_rule_bit_index)
-							&& rule_get_action(current_sub.policy, current_rule_bit_index) == action)){
+			if (!rule_has_action(data, current_rule_bit_index) ||
+					(rule_has_action(data, current_rule_bit_index)
+							&& rule_get_action(data, current_rule_bit_index) == action)){
 
 				//#bits(id)
 				current_rule_bit_index += 8;
@@ -499,32 +501,32 @@ evaluate_compressed_policy(const uint8_t *data, uint16_t datalen) {
 				//#bits(5 masks)
 				current_rule_bit_index += 5;
 
-				if (get_bit(copy++, current_sub.policy)) {
+				if (get_bit(copy++, data)) {
 					current_rule_bit_index += 8;
 				}
 
-				if (get_bit(copy++, current_sub.policy)) {
+				if (get_bit(copy++, data)) {
 					current_rule_bit_index += 8;
 				}
 
-				if (get_bit(copy++, current_sub.policy)) {
+				if (get_bit(copy++, data)) {
 					current_rule_bit_index += 8;
 				}
 
-				if (get_bit(copy++, current_sub.policy)) {
+				if (get_bit(copy++, data)) {
 					current_rule_bit_index += 3;
 				}
 
-				uint8_t has_at_least_one_obligation = get_bit(copy, current_sub.policy);
+				uint8_t has_at_least_one_obligation = get_bit(copy, data);
 
-				uint8_t max_expressions_index = get_3_bits_from(current_rule_bit_index, current_sub.policy);
+				uint8_t max_expressions_index = get_3_bits_from(current_rule_bit_index, data);
 				//#bits(max_expression_index) = 3
 				current_rule_bit_index += 3;
 				int condition_index = 0;
 				//Voor elke voorwaarde: check die en geef de nieuwe bit index terug
 				for (; condition_index < max_expressions_index + 1; condition_index++ ) {
 					//Check condition
-					uint8_t condition_met = compressed_condition_is_met(current_sub.policy, &current_rule_bit_index);
+					uint8_t condition_met = compressed_condition_is_met(data, &current_rule_bit_index);
 					if (!condition_met && effect) {
 						//printf("Condition was not met, therefore, access is denied.\n");
 						all_rules_check_out = 0;
@@ -541,24 +543,24 @@ evaluate_compressed_policy(const uint8_t *data, uint16_t datalen) {
 				//Enforce obligations
 				if (has_at_least_one_obligation) {
 					//Assumption: current_rule_bit_index is now at the very end of all the expression
-					uint8_t max_obligations_index = get_3_bits_from(current_rule_bit_index, current_sub.policy);
+					uint8_t max_obligations_index = get_3_bits_from(current_rule_bit_index, data);
 					//#bits(max_expression_index) = 3
 					current_rule_bit_index += 3;
 
 					int obligation_index = 0;
 					for (; obligation_index < max_obligations_index + 1; obligation_index++ ) {
-						uint8_t has_fulfill_on = get_bit(current_rule_bit_index++, current_sub.policy);
+						uint8_t has_fulfill_on = get_bit(current_rule_bit_index++, data);
 						//Always execute task if obligation does not have fulfill_on specification
 						if (!has_fulfill_on) {
-							compressed_perform_task(current_sub.policy,&current_rule_bit_index);
+							compressed_perform_task(data,&current_rule_bit_index);
 						}
 						//Check if existing fulfill_on matches rule outcome
-						else if (get_bit(current_rule_bit_index++, current_sub.policy) == result_of_this_rule) {
-							compressed_perform_task(current_sub.policy,&current_rule_bit_index);
+						else if (get_bit(current_rule_bit_index++, data) == result_of_this_rule) {
+							compressed_perform_task(data,&current_rule_bit_index);
 						}
 						else {
 							//Increase past this obligation
-							current_rule_bit_index = task_increase_index(current_sub.policy, current_rule_bit_index);
+							current_rule_bit_index = task_increase_index(data, current_rule_bit_index);
 						}
 					}
 				}

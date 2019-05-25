@@ -3,6 +3,7 @@
 
 #include "policy.h"
 
+//#define get_bit(index,data) !!(data[((index) / 8)] & (  1 << (7 - ((index) % 8) )))
 
 //TODO To include:
 // System attribute reference table (max nb: 256)

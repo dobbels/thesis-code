@@ -3,6 +3,8 @@
 
 #include "encoded-policy.h"
 
+//#define get_bit(index,data) !!(data[((index) / 8)] & (  1 << (7 - ((index) % 8) )))
+
 void
 copy_policy(const uint8_t *data, int bit_index, uint8_t policy_size, uint8_t *destination)
 {
