@@ -126,15 +126,13 @@ uint8_t resource_key[16] =
 // Enough room for a largest Hidra message
 uint8_t messaging_buffer[65];
 
-//General file structure is a concatenation of: //TODO dit kan veel beter door ze hier te declareren en in het programma te initialiseren. Dan kan je wel relatief tov elkaar indexen
-//Current last one-way key chain value Kr,cm
-uint8_t k_i_r_cm_offset = 0;
+//General file structure is a concatenation of:
 //Pending subject number
-uint8_t sub_offset = 16;
+uint8_t sub_offset = 0;
 //Nonce3
-uint8_t nonce3_offset = 17;
+uint8_t nonce3_offset = 1;
 
-
+uint8_t current_k_i_r_cm[16];
 uint8_t any_previous_key_chain_value_stored = 0;
 
 static void full_print_hex(const uint8_t* str, uint8_t length);
@@ -676,9 +674,9 @@ handle_subject_access_request(const uint8_t *data,
 
 			// print request (if it is the expected demo request)
 			if (action == 2 && function == 18) {
-				printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
+//				printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
 			} else if (action == 2 && function == 19) {
-				printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
+//				printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
 			} else {
 				printf("Did not receive the expected demo-request.\n");
 				return 0;
@@ -730,11 +728,11 @@ handle_subject_access_request(const uint8_t *data,
 							int obl_bit_index = rule_get_first_obl_index(current_sub->policy,rule_bit_index);
 
 							//Always execute task || Obligation has fulfill_on
-							if (!obligation_has_fulfill_on(current_sub->policy, obl_bit_index)) {
+							if (!obligation_has_fulfill_on(current_sub->policy, obl_bit_index++)) {
 								perform_task(current_sub->policy,obl_bit_index);
 							}
 							//Check if existing fulfill_on matches rule outcome
-							else if (obligation_get_fulfill_on(current_sub->policy, obl_bit_index) == rule_checks_out) {
+							else if (obligation_get_fulfill_on(current_sub->policy, obl_bit_index++) == rule_checks_out) {
 								perform_task(current_sub->policy,obl_bit_index);
 							}
 						}
@@ -1014,20 +1012,12 @@ process_cm_ind(uint8_t subject_id,
 		if (!any_previous_key_chain_value_stored) {
 			current_subject->fresh_information = 0;
 
-			//Write this value to file system
-			int fd_write = cfs_open(filename, CFS_WRITE);
-			if(fd_write != -1) {
-				int n = cfs_write(fd_write, messaging_buffer + 13, 16);
-				cfs_close(fd_write);
-				//printf("Successfully written Kircm (%i bytes) to %s\n", n, filename);
-				//printf("\n");
-			} else {
-			   printf("Error: could not write Kircm to memory.\n");
-			}
+			//Write this value to memory
+			memcpy(current_k_i_r_cm, messaging_buffer + 13, 16);
 			any_previous_key_chain_value_stored = 1; //=> on requests from next subjects, to do or not to do?
 
 			//Write subject id to file system to update freshness later on
-			fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
+			int fd_write = cfs_open(filename, CFS_WRITE);
 			if(fd_write != -1) {
 				int n = cfs_write(fd_write, &subject_id, 1);
 				cfs_close(fd_write);
@@ -1039,9 +1029,37 @@ process_cm_ind(uint8_t subject_id,
 			need_to_request_next_key = 1;
 		} else {
 
-			//This is not handled in the demo
-			printf("Error: key chain value shouldn't exist\n");
+			//Check key chain value with stored value
+			static uint8_t new_key[16];
+			memcpy(new_key, messaging_buffer + 13, 16);
 
+			//printf("new_key: \n");
+			full_print_hex(new_key, 16);
+			//printf("old_key: \n");
+			full_print_hex(current_k_i_r_cm, 16);
+
+			static uint8_t next_key[16];
+			md5(next_key, new_key, 16);
+			//printf("next_key: \n");
+			full_print_hex(next_key, 16);
+
+			if (memcmp(current_k_i_r_cm, next_key, 16) == 0) {
+				//Get pending subject number for file system and update freshness
+				uint8_t subject_id;
+				int fd_read = cfs_open(filename, CFS_READ);
+				if(fd_read!=-1) {
+					cfs_seek(fd_read, sub_offset, CFS_SEEK_SET);
+					cfs_read(fd_read, &subject_id, 1);
+					cfs_close(fd_read);
+					//printf("Setting freshness of subject %d\n", subject_id);
+					set_fresh_information(subject_id, 1);
+				} else {
+					printf("Error: could not read subect id from memory.\n");
+				}
+			} else {
+				printf("Error: Not a correct key, therefore subject information is not fresh \n");
+				need_to_request_next_key = 1;
+			}
 		}
 
 
@@ -1078,27 +1096,18 @@ process_cm_ind_rep(const uint8_t *data,
 		//Check key chain value with stored value
 		static uint8_t new_key[16];
 		memcpy(new_key, data + 2, 16);
-		static uint8_t old_key[16];
-		fd_read = cfs_open(filename, CFS_READ);
-		if(fd_read!=-1) {
-		  cfs_read(fd_read, old_key, 16);
-		  cfs_close(fd_read);
-		} else {
-		  printf("Error: could not read nonce from memory.\n");
-		}
 
 		//printf("new_key: \n");
 		full_print_hex(new_key, 16);
 		//printf("old_key: \n");
-		full_print_hex(old_key, 16);
+		full_print_hex(current_k_i_r_cm, 16);
 
 		static uint8_t next_key[16];
 		md5(next_key, new_key, 16);
 		//printf("next_key: \n");
 		full_print_hex(next_key, 16);
 
-		if (memcmp(old_key, next_key, 16) == 0) {
-//		if (is_next_in_chain(old_key, new_key, 16)) {
+		if (memcmp(current_k_i_r_cm, next_key, 16) == 0) {
 			//Get pending subject number for file system and update freshness
 			uint8_t subject_id;
 			fd_read = cfs_open(filename, CFS_READ);
@@ -1142,11 +1151,9 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 //		timestamp = clock_time();
 
 		//Clean up for next demo association (as it is at the moment)
-		any_previous_key_chain_value_stored = 0;
 		const char * filename = "properties";
 		cfs_remove(filename);
-//		printf("\n");
-		printf("End of Hidra exchange with ACS\n");
+		printf("End of Hidra exchange with ACS for this subject\n");
 		return 1;
 	}
 
@@ -1168,6 +1175,7 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 		} else {
 			set_fresh_information(subject_id, 1);
 			printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
+			printf("End of Hidra exchange with ACS for this subject\n");
 		}
 	}
 	else {

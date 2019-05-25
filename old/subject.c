@@ -16,69 +16,6 @@
 
 #include "../bit-operations.h"
 
-#include "rtimer.h"
-#include "sys/energest.h"
-
-#define ENERGEST_SECOND RTIMER_ARCH_SECOND
-
-#ifndef ENERGEST_GET_TOTAL_TIME
-#ifdef ENERGEST_CONF_GET_TOTAL_TIME
-#define ENERGEST_GET_TOTAL_TIME ENERGEST_CONF_GET_TOTAL_TIME
-#else /* ENERGEST_CONF_GET_TOTAL_TIME */
-#define ENERGEST_GET_TOTAL_TIME energest_get_total_time
-#endif /* ENERGEST_CONF_GET_TOTAL_TIME */
-#endif /* ENERGEST_GET_TOTAL_TIME */
-
-uint64_t ENERGEST_GET_TOTAL_TIME(void);
-
-uint64_t
-energest_get_total_time(void)
-{
-  return energest_type_time(ENERGEST_TYPE_CPU) +
-    energest_type_time(ENERGEST_TYPE_LPM);
-}
-
-static inline unsigned long
-to_seconds(uint64_t time)
-{
-  return (unsigned long)(time / ENERGEST_SECOND);
-}
-
-void
-print_energest_data(void) {
-	/*
-	 * Update all energest times. Should always be called before energest
-	 * times are read.
-	 */
-	energest_flush();
-
-	printf("\nEnergest subject:\n");
-	printf(" CPU          %4lu ticks LPM      %4lu ticks Total ticks %lu \n",
-			   energest_type_time(ENERGEST_TYPE_CPU),
-			   energest_type_time(ENERGEST_TYPE_LPM),
-			   ENERGEST_GET_TOTAL_TIME());
-		printf(" Radio LISTEN %4lu ticks TRANSMIT %4lu ticks OFF      %4lu ticks\n",
-			   energest_type_time(ENERGEST_TYPE_LISTEN),
-			   energest_type_time(ENERGEST_TYPE_TRANSMIT),
-			   ENERGEST_GET_TOTAL_TIME()
-						  - energest_type_time(ENERGEST_TYPE_TRANSMIT)
-						  - energest_type_time(ENERGEST_TYPE_LISTEN));
-//	printf(" CPU          %4lus LPM      %4lus Total time %lus\n",
-//		   to_seconds(energest_type_time(ENERGEST_TYPE_CPU)),
-//		   to_seconds(energest_type_time(ENERGEST_TYPE_LPM)),
-//		   to_seconds(ENERGEST_GET_TOTAL_TIME()));
-//	printf(" Radio LISTEN %4lus TRANSMIT %4lus OFF      %4lus\n",
-//		   to_seconds(energest_type_time(ENERGEST_TYPE_LISTEN)),
-//		   to_seconds(energest_type_time(ENERGEST_TYPE_TRANSMIT)),
-//		   to_seconds(ENERGEST_GET_TOTAL_TIME()
-//					  - energest_type_time(ENERGEST_TYPE_TRANSMIT)
-//					  - energest_type_time(ENERGEST_TYPE_LISTEN)));
-}
-
-unsigned long initial_timestamp;
-unsigned long timestamp;
-unsigned long r_timestamp;
-
 // To print the IPv6 addresses in a friendlier way
 #include "debug.h"
 #define DEBUG DEBUG_PRINT
@@ -177,6 +114,12 @@ receiver_resource(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
+	printf("\nData received from: ");
+	PRINT6ADDR(sender_addr);
+	printf("\nAt port %d from port %d with length %d\n",
+		  receiver_port, sender_port, datalen);
+	printf("Data Rx: %.*s\n", datalen, data);
+
 	const char * filename = "properties";
 
 	//Check session key
@@ -191,12 +134,10 @@ receiver_resource(struct simple_udp_connection *c,
 	}
 
 	if (datalen == 32) {
-//		printf("s_r_req -> s_r_rep: %4lu ticks\n", clock_time() - timestamp);
-//		timestamp = clock_time();
 		static uint8_t s_r_rep[32];
 		memcpy(s_r_rep, data, sizeof(s_r_rep));
 
-		//printf("Received HID_S_R_REP.\n");
+		printf("Received HID_S_R_REP.\n");
 		//Decrypt message
 		static uint8_t ksr[16];
 		fd_read = cfs_open(filename, CFS_READ);
@@ -237,16 +178,7 @@ receiver_resource(struct simple_udp_connection *c,
 
 				}
 				security_association_established = 1;
-//				printf("End of Successful Hidra Exchange.\n");
-//				unsigned long last_duration = clock_time() - timestamp;
-//				unsigned long duration = clock_time() - initial_timestamp;
-//				printf("s_r_req reception: %4lu ticks\n", clock_time() - timestamp);
-//				printf("It took %4lu ticks to complete the protocol\n", duration);
-//				print_energest_data();
-//				unsigned long r_duration = RTIMER_NOW() - r_timestamp;
-//				printf("That means about %4lu milliseconds \n", duration*7813/1000);
-//				printf("That means about %4lu milliseconds \n", (r_duration<<)/RTIMER_ARCH_SECOND);
-//				printf("That means about %4lu milliseconds \n", r_duration*145982196/100000000);
+				printf("End of Successful Hidra Exchange.\n");
 			} else {
 				printf("Wrong Nonce4 HID_S_R_REP.\n");
 			}
@@ -254,17 +186,14 @@ receiver_resource(struct simple_udp_connection *c,
 			printf("Wrong NonceSR HID_S_R_REP.\n");
 		}
 	} else if (datalen == 3) {
-//		printf("access request response: %4lu ticks\n", clock_time() - timestamp);
-//		timestamp = clock_time();
 		uint8_t access_response[3];
 		memcpy(access_response, data, sizeof(access_response));
 		xcrypt_ctr(session_key, access_response, sizeof(access_response));
 		if (nonce_equals(access_counter+1, access_response + 1)) {
 			store_access_counter(access_response + 1);
-			//printf("access_response[0]: %d\n", access_response[0]);
-//			printf("processed_response: %4lu ticks\n", clock_time() - timestamp);
+			printf("access_response[0]: %d\n", access_response[0]);
 			if(access_response[0]){
-				//printf("Received Acknowledge.\n");
+				printf("Received Acknowledge.\n");
 			} else {
 				printf("Received Non-Acknowledge.\n");
 			}
@@ -273,7 +202,7 @@ receiver_resource(struct simple_udp_connection *c,
 		}
 	} else {
 		if(data[0]){
-			//printf("Received Acknowledge.\n");
+			printf("Received Acknowledge.\n");
 		} else {
 			printf("Received Non-Acknowledge.\n");
 		}
@@ -284,28 +213,29 @@ static void
 process_ans_rep(const uint8_t *data,
         uint16_t datalen) {
 	const char * filename = "properties";
-
+	printf("HID_ANS_REP content:\n");
 	static uint8_t ans_rep[64];
 	memcpy(ans_rep, data, datalen);
+	full_print_hex(ans_rep, sizeof(ans_rep));
 
 	//Store the encrypted TGT for the credential manager
 	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
 	if(fd_write != -1) {
 		int n = cfs_write(fd_write, ans_rep + 2, 26);
 		cfs_close(fd_write);
-		//printf("Successfully written ticket (%i bytes) to %s\n", n, filename);
-		//printf("\n");
+		printf("Successfully written ticket (%i bytes) to %s\n", n, filename);
+		printf("\n");
 	} else {
 	  printf("Error: could not write ticket to storage.\n");
 	}
 
-	//printf("Encrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
+	printf("Encrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
 	uint8_t encrypted_index = 2 + 16 + 2 + 8;
 	full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
 
 	//Decrypt rest of message
 	xcrypt_ctr(subject_key, ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
-	//printf("Decrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
+	printf("Decrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
 	full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
 
 	static uint8_t nonce1[8];
@@ -318,7 +248,7 @@ process_ans_rep(const uint8_t *data,
 	}
 	if (memcmp(ans_rep + encrypted_index + 24, nonce1, 8) == 0) {
 
-		//printf("Decrypted HID_ANS_REP, Kscm: \n");
+		printf("Decrypted HID_ANS_REP, Kscm: \n");
 		full_print_hex(ans_rep+encrypted_index, 16);
 
 		//Store Kscm
@@ -326,13 +256,13 @@ process_ans_rep(const uint8_t *data,
 		if(fd_write != -1) {
 			int n = cfs_write(fd_write, ans_rep + encrypted_index, 16);
 			cfs_close(fd_write);
-			//printf("Successfully written Kscm (%i bytes) to %s\n", n, filename);
-			//printf("\n");
+			printf("Successfully written Kscm (%i bytes) to %s\n", n, filename);
+			printf("\n");
 		} else {
 		   printf("Error: could not write Kscm to storage.\n");
 		}
 
-		//printf("Decrypted HID_ANS_REP, Noncescm: \n");
+		printf("Decrypted HID_ANS_REP, Noncescm: \n");
 		full_print_hex(ans_rep+encrypted_index+16, 8);
 
 		//Store Noncescm
@@ -340,15 +270,15 @@ process_ans_rep(const uint8_t *data,
 		if(fd_write != -1) {
 			int n = cfs_write(fd_write, ans_rep + encrypted_index + 16, 8);
 			cfs_close(fd_write);
-			//printf("Successfully written Noncescm (%i bytes) to %s\n", n, filename);
-			//printf("\n");
+			printf("Successfully written Noncescm (%i bytes) to %s\n", n, filename);
+			printf("\n");
 		} else {
 		   printf("Error: could not write Noncescm to storage.\n");
 		}
 
 		//Store pseudonym assigned to this subject
 		memcpy(pseudonym, ans_rep + encrypted_index + 34, 2);
-		//printf("Received pseudonym: \n");
+		printf("Received pseudonym: \n");
 		full_print_hex(pseudonym, 2);
 
 	} else {
@@ -377,14 +307,14 @@ construct_cm_req(uint8_t *cm_req) {
 	part_of_nonce = random_rand();
 	cm_req[9] = (part_of_nonce >> 8);
 	cm_req[10] = part_of_nonce & 0xffff;
-	//printf("Nonce2 \n");
+	printf("Nonce2 \n");
 	full_print_hex(cm_req + 3, 8);
 	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
 	if(fd_write!=-1) {
 	  int n = cfs_write(fd_write, cm_req + 3, 8);
 	  cfs_close(fd_write);
-	//printf("Successfully written Nonce2 (%i bytes) to %s\n", n, filename);
-	//printf("\n");
+	printf("Successfully written Nonce2 (%i bytes) to %s\n", n, filename);
+	printf("\n");
 	} else {
 	  printf("Error: could not write Nonce2 to storage.\n");
 	}
@@ -417,7 +347,7 @@ construct_cm_req(uint8_t *cm_req) {
 	full_print_hex(cm_req + 39, 8);
 
 	//Print unencrypted message for debugging purposes
-	//printf("Unencrypted CM_REQ message: \n");
+	printf("Unencrypted CM_REQ message: \n");
 	full_print_hex(cm_req, 47);
 
 	static uint8_t kscm[16];
@@ -438,17 +368,17 @@ static uint8_t
 process_cm_rep(const uint8_t *data,
         uint16_t datalen) {
 	const char * filename = "properties";
-	//printf("HID_CM_REP content:\n");
+	printf("HID_CM_REP content:\n");
 	static uint8_t cm_rep[62];
 	memcpy(cm_rep, data, datalen);
 	full_print_hex(cm_rep, sizeof(cm_rep));
 
 	//If valid id (=pseudonym)
 	if (memcmp(pseudonym, cm_rep, 2) == 0) {
-		//printf("ticketR: \n");
+		printf("ticketR: \n");
 		full_print_hex(cm_rep + 2, 26);
 
-		//printf("ticketR, bit 8: \n");
+		printf("ticketR, bit 8: \n");
 		full_print_hex(cm_rep + 10, 1);
 
 		// Store ticketR
@@ -456,8 +386,8 @@ process_cm_rep(const uint8_t *data,
 		if(fd_write != -1) {
 			int n = cfs_write(fd_write, cm_rep + 2, 26);
 			cfs_close(fd_write);
-			//printf("Successfully written ticketR (%i bytes) to %s\n", n, filename);
-			//printf("\n");
+			printf("Successfully written ticketR (%i bytes) to %s\n", n, filename);
+			printf("\n");
 		} else {
 		  printf("Error: could not write ticketR to storage.\n");
 		}
@@ -496,11 +426,11 @@ process_cm_rep(const uint8_t *data,
 			full_print_hex(nonce2, 8);
 			return 0;
 		} else {
-			//printf("Correct decryption of Nonce2 in HID_CM_REP.\n");
-			//printf("\n");
+			printf("Correct decryption of Nonce2 in HID_CM_REP.\n");
+			printf("\n");
 		}
 
-		//printf("Ksr: \n");
+		printf("Ksr: \n");
 		full_print_hex(cm_rep + 28, 16);
 
 		// Store Ksr
@@ -508,13 +438,13 @@ process_cm_rep(const uint8_t *data,
 		if(fd_write != -1) {
 			int n = cfs_write(fd_write, cm_rep + 28, 16);
 			cfs_close(fd_write);
-			//printf("Successfully written Ksr (%i bytes) to %s\n", n, filename);
-			//printf("\n");
+			printf("Successfully written Ksr (%i bytes) to %s\n", n, filename);
+			printf("\n");
 		} else {
 		  printf("Error: could not write Ksr to storage.\n");
 		}
 
-		//printf("nonceSR: \n");
+		printf("nonceSR: \n");
 		full_print_hex(cm_rep + 44, 8);
 
 		// Store Noncesr
@@ -522,8 +452,8 @@ process_cm_rep(const uint8_t *data,
 		if(fd_write != -1) {
 			int n = cfs_write(fd_write, cm_rep + 44, 8);
 			cfs_close(fd_write);
-			//printf("Successfully written nonceSR (%i bytes) to %s\n", n, filename);
-			//printf("\n");
+			printf("Successfully written nonceSR (%i bytes) to %s\n", n, filename);
+			printf("\n");
 		} else {
 		  printf("Error: could not write nonceSR to storage.\n");
 		}
@@ -533,7 +463,7 @@ process_cm_rep(const uint8_t *data,
 
 static void
 construct_s_r_req(uint8_t *s_r_req) {
-	//printf("Constructing HID_S_R_REQ.\n");
+	printf("Constructing HID_S_R_REQ.\n");
 	const char * filename = "properties";
 	// Put ticketR in message from storage
 	int fd_read = cfs_open(filename, CFS_READ);
@@ -558,7 +488,7 @@ construct_s_r_req(uint8_t *s_r_req) {
 		printf("Error: could not read nonceSR from storage.\n");
 	}
 
-	//printf("NonceSR: \n");
+	printf("NonceSR: \n");
 	full_print_hex(s_r_req + 28, 8);
 
 	// Generate session key to propose (16 bytes)
@@ -593,8 +523,8 @@ construct_s_r_req(uint8_t *s_r_req) {
 	if(fd_write != -1) {
 		int n = cfs_write(fd_write, s_r_req + start_of_key, 16);
 		cfs_close(fd_write);
-		//printf("Successfully written Subkey (%i bytes) to %s\n", n, filename);
-		//printf("\n");
+		printf("Successfully written Subkey (%i bytes) to %s\n", n, filename);
+		printf("\n");
 	} else {
 	  printf("Error: could not write Subkey to storage.\n");
 	}
@@ -633,8 +563,8 @@ construct_s_r_req(uint8_t *s_r_req) {
 	if(fd_write != -1) {
 		int n = cfs_write(fd_write, s_r_req + start_of_nonce, 8);
 		cfs_close(fd_write);
-		//printf("Successfully written Nonce4 (%i bytes) to %s\n", n, filename);
-		//printf("\n");
+		printf("Successfully written Nonce4 (%i bytes) to %s\n", n, filename);
+		printf("\n");
 	} else {
 	  printf("Error: could not write Nonce4 to storage.\n");
 	}
@@ -652,12 +582,14 @@ receiver_server(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
+	printf("\nData received from: ");
+	PRINT6ADDR(sender_addr);
+	printf("\nAt port %d from port %d with length %d\n",
+		  receiver_port, sender_port, datalen);
 	if (authentication_requested) {
 		if (!credentials_requested) {
-//			printf("ans_ -> ans_rep: %4lu ticks\n", clock_time() - timestamp);
-//			timestamp = clock_time();
 			// Perform phase 2
-			if(datalen != 64) {
+			if(datalen != 62) {
 				printf("Error: different length of HID_ANS_REP packet: %d\n", datalen);
 			}
 			//Check Subject ID
@@ -669,16 +601,12 @@ receiver_server(struct simple_udp_connection *c,
 				construct_cm_req(response);
 				//Send message to credential manager
 				simple_udp_sendto(&unicast_connection_server, response, sizeof(response), &server_addr);
-				//printf("Sent HID_CM_REQ\n");
+				printf("Sent HID_CM_REQ\n");
 				credentials_requested = 1;
-//				printf("ans_rep -> cm_req: %4lu ticks\n", clock_time() - timestamp);
-//				timestamp = clock_time();
 			} else {
 				printf("Error: wrong subject id %d\n", get_char_from(8, data));
 			}
 		} else {
-//			printf("cm_req -> cm_rep: %4lu ticks\n", clock_time() - timestamp);
-//			timestamp = clock_time();
 			//Receive last step in phase 2
 			if (process_cm_rep(data, datalen) != 0) {
 				//Perform phase 3 exchange with resource
@@ -686,9 +614,7 @@ receiver_server(struct simple_udp_connection *c,
 				construct_s_r_req(response);
 				//Send message to credential manager
 				simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
-				//printf("Sent HID_S_R_REQ\n");
-//				printf("cm_rep -> s_r_req: %4lu ticks\n", clock_time() - timestamp);
-//				timestamp = clock_time();
+				printf("Sent HID_S_R_REQ\n");
 			} else {
 				printf("Error while processing HID_CM_REP\n");
 			}
@@ -700,17 +626,8 @@ receiver_server(struct simple_udp_connection *c,
 
 static void
 start_hidra_protocol(void) {
-
-//	print_energest_data();
-
-//	timestamp = clock_time();
-
-//	initial_timestamp = clock_time();
-
 	static uint8_t ans_request[15];
 	const char *filename = "properties";
-
-//	r_timestamp = RTIMER_NOW();
 
 	// IdS (2 bytes)
 	ans_request[0] = 0;
@@ -741,28 +658,23 @@ start_hidra_protocol(void) {
 	if(fd_write != -1) {
 		int n = cfs_write(fd_write, ans_request + 7, 8);
 		cfs_close(fd_write);
-		//printf("Successfully written nonce1 (%i bytes) to %s\n", n, filename);
-		//printf("\n");
+		printf("Successfully written nonce1 (%i bytes) to %s\n", n, filename);
+		printf("\n");
 	} else {
 	  printf("Error: could not write nonce1 to storage.\n");
 	}
 
-	//printf("Nonce1: \n");
+//	printf("Nonce1: \n");
 //	full_print_hex(ans_request + 7,8);
-	//printf("ANS request message: \n");
+	printf("ANS request message: \n");
 	full_print_hex(ans_request,15);
 
 	simple_udp_sendto(&unicast_connection_server, ans_request, sizeof(ans_request), &server_addr);
 	authentication_requested = 1;
-
-//	printf("hid_req: %4lu ticks\n", clock_time() - timestamp);
-//	timestamp = clock_time();
 }
 
 static void
 send_access_request(void) {
-//	timestamp = clock_time();
-
 	uint8_t message_length = 7;
 	uint8_t response[message_length + 4];
 	const char *filename = "properties";
@@ -773,9 +685,9 @@ send_access_request(void) {
 	uint8_t function = 18;
 	uint8_t input_existence = 0;
 	response[2] = (action << 6) | (function >> 2);
-	//printf("response[2] %d should be 132 \n", response[2]);
+	printf("response[2] %d should be 132 \n", response[2]);
 	response[3] = (function << 6) | (input_existence >> 2); // with 5 padding zero-bits
-	//printf("response[3] %d should be 128 \n", response[3]);
+	printf("response[3] %d should be 128 \n", response[3]);
 
 	// input existence boolean: if input exists, the bit is set to 1 and input couples <type,value> follow
 
@@ -804,9 +716,6 @@ send_access_request(void) {
 	//TODO nieuwe hmac/hash van alles, maar subject id niet encrypteren, anders heeft resource geen idee welke sleutel te gebruiken
 	simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
 	resource_access_requested = 1;
-
-//	printf("construct access_request: %4lu ticks\n", clock_time() - timestamp);
-//	timestamp = clock_time();
 }
 
 static void
@@ -846,23 +755,9 @@ set_global_address(void)
 
 PROCESS_THREAD(hidra_subject, ev, data)
 {
-	static struct etimer periodic_timer;
-
 	PROCESS_BEGIN();
 
-//	print_energest_data();
-
 	SENSORS_ACTIVATE(button_sensor);
-
-//	clock_init();
-
-//	static int i = 4;
-//	etimer_set(&periodic_timer, CLOCK_SECOND * 2);
-//	while(i--) {
-//		print_energest_data();
-//		PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
-//		etimer_reset(&periodic_timer);
-//	}
 //	random_init();
 
 	//use global address to deduce node-id
@@ -905,36 +800,23 @@ PROCESS_THREAD(hidra_subject, ev, data)
 	//Nonce4
 	nonce4_offset = subkey_offset + 16;
 
-
 	uint8_t testing = 0;
 	while(1) {
 		PROCESS_WAIT_EVENT();
-//		if (etimer_expired(&periodic_timer)) {
-//			clock_time_t clock_time(); // Get the system time.
-//			unsigned long clock_seconds(); // Get the system time in seconds.
-//			void clock_delay(unsigned int delay); // Delay the CPU.
-//			void clock_wait(int delay); // Delay the CPU for a number of clock ticks.
-//			void clock_init(void); // Initialize the clock module.
-//			CLOCK_SECOND; // The number of ticks per second.
-//			printf("clock_time(), i.e. ticks: %4lu\n", clock_time());//return unsigned long
-//			printf("clock_seconds: %4lus\n", clock_seconds());
-
-//			clock_set_seconds(unsigned long sec) //TODO test dit + print clock_seconds hierna
-
-//			printf("RTIMER_ARCH_SECOND: %4lu ticks\n", RTIMER_ARCH_SECOND);
-//			printf("CLOCK_SECOND: %4lu ticks\n", CLOCK_SECOND);
-//			etimer_reset(&periodic_timer);
-//		}
 
 		if ((ev==sensors_event) && (data == &button_sensor)) {
 			if (testing) {
-//				printf("clock_time(), i.e. ticks: %4lu\n", clock_time());//return unsigned long
-//				printf("clock_seconds: %4lus\n", clock_seconds());
-//				printf("RTIMER_ARCH_SECOND: %4lu ticks\n", RTIMER_ARCH_SECOND);
-//				printf("RTIMER_SECOND: %4lu ticks\n", RTIMER_SECOND);
-//				printf("CLOCK_SECOND: %4lu ticks\n", CLOCK_SECOND);
+				access_counter = 564;
+				uint8_t test[2];
+				memset(test, 0, 2);
+				printf("nonce_equals(%d, test): %d\n", access_counter, nonce_equals(access_counter, test));
+				get_access_counter(test);
+				printf("nonce_equals(%d, test): %d\n", access_counter, nonce_equals(access_counter, test));
+				get_access_counter_increment(test);
+				printf("nonce_equals(%d, test): %d\n", access_counter, nonce_equals(access_counter, test));
+				access_counter++;
+				printf("nonce_equals(%d, test): %d\n", access_counter, nonce_equals(access_counter, test));
 			}
-
 			else if (!security_association_established) {
 				printf("Starting Hidra Protocol\n");
 				start_hidra_protocol();
@@ -977,12 +859,12 @@ static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 }
 
 static void full_print_hex(const uint8_t* str, uint8_t length) {
-//	int i = 0;
-//	for (; i < (length/16) ; i++) {
-//		print_hex(str + i * 16, 16);
-//	}
-//	print_hex(str + i * 16, length%16);
-//	printf("\n");
+	int i = 0;
+	for (; i < (length/16) ; i++) {
+		print_hex(str + i * 16, 16);
+	}
+	print_hex(str + i * 16, length%16);
+	printf("\n");
 }
 
 // prints string as hex
@@ -1505,7 +1387,7 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 //Hash to 32 bits from https://en.wikipedia.org/wiki/MurmurHash
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 {
-	//printf("Values to hash\n");
+	printf("Values to hash\n");
 	full_print_hex(key, len);
 	uint32_t h = seed;
 	if (len > 3) {

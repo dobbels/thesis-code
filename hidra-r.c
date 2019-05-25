@@ -1,20 +1,38 @@
 #include "contiki.h"
+
 #include "lib/random.h"
+#include "net/ip/uip.h"
+#include "net/ipv6/uip-nd6.h"
+#include "net/ipv6/uip-ds6-route.h"
+#include "net/ipv6/uip-ds6-nbr.h"
+
 #include "net/ipv6/uip-ds6.h"
-#include "dev/button-sensor.h"
+#include "dev/leds.h"
+//#include "dev/button-sensor.h"
 #include "simple-udp.h"
+
+#include "lib/memb.h"
 #include "cfs/cfs.h"
 
-#include "../tinycrypt/lib/include/tinycrypt/hmac.h"
-#include "../tinycrypt/lib/include/tinycrypt/sha256.h"
-#include "../tinycrypt/lib/include/tinycrypt/constants.h"
-#include "../tinycrypt/lib/include/tinycrypt/utils.h"
+#include "tiny-AES-c/aes.h"
+
+#include "tinycrypt/lib/include/tinycrypt/hmac.h"
+#include "tinycrypt/lib/include/tinycrypt/sha256.h"
+#include "tinycrypt/lib/include/tinycrypt/constants.h"
+#include "tinycrypt/lib/include/tinycrypt/utils.h"
 
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdint.h>
 
-#include "../tiny-AES-c/aes.h"
+#include "encoded-policy.h"
+#include "bit-operations.h"
 
-#include "../bit-operations.h"
+// To print the IPv6 addresses in a friendlier way
+#include "debug.h"
+#define DEBUG DEBUG_PRINT
+#include "net/ip/uip-debug.h"
 
 #include "rtimer.h"
 #include "sys/energest.h"
@@ -52,7 +70,7 @@ print_energest_data(void) {
 	 */
 	energest_flush();
 
-	printf("\nEnergest subject:\n");
+	printf("\nEnergest resource:\n");
 	printf(" CPU          %4lu ticks LPM      %4lu ticks Total ticks %lu \n",
 			   energest_type_time(ENERGEST_TYPE_CPU),
 			   energest_type_time(ENERGEST_TYPE_LPM),
@@ -75,101 +93,795 @@ print_energest_data(void) {
 //					  - energest_type_time(ENERGEST_TYPE_LISTEN)));
 }
 
-unsigned long initial_timestamp;
+unsigned long eval_timestamp;
 unsigned long timestamp;
-unsigned long r_timestamp;
 
-// To print the IPv6 addresses in a friendlier way
-#include "debug.h"
-#define DEBUG DEBUG_PRINT
-#include "net/ip/uip-debug.h"
+#define SERVER_UDP_PORT 1234
+#define SUBJECT_UDP_PORT 1996
 
-#define SERVER_UDP_PORT 4321
-#define RESOURCE_UDP_PORT 1996
+#define MAX_NUMBER_OF_SUBJECTS 3
 
-//#define ID 3
-static uint8_t subject_id = 0;
-static uint8_t pseudonym[2];
+uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
+void compute_mac(uint8_t *key, const uint8_t *data, uint8_t datalen, uint8_t * final_digest);
+uint8_t same_mac(const uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes, uint8_t *key);
 
-static uint8_t authentication_requested = 0;
-static uint8_t credentials_requested = 0;
-static uint8_t resource_access_requested = 0;
-static uint8_t security_association_established = 0;
+static void store_access_counter(uint8_t subject_id, uint8_t * nonce);
+static void get_access_counter_increment(uint8_t subject_id, uint8_t * nonce);
+static uint8_t new_nonce_is_greater_than_counter(uint8_t subject_id, uint8_t * nonce);
+
+static uint8_t * get_session_key(uint8_t subject_id);
+static void set_session_key(uint8_t subject_id, uint8_t * key);
 
 static struct simple_udp_connection unicast_connection_server;
-static struct simple_udp_connection unicast_connection_resource;
+static struct simple_udp_connection unicast_connection_subject;
 
 uip_ipaddr_t resource_addr;
-uip_ipaddr_t server_addr;
 
-static uint8_t subject_key[16] =
-	{ (uint8_t) 0x7e, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x16,
+uint8_t resource_key[16] =
+	{ (uint8_t) 0x2b, (uint8_t) 0x7e, (uint8_t) 0x15, (uint8_t) 0x16,
 		(uint8_t) 0x28, (uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x2b,
 		(uint8_t) 0x2b, (uint8_t) 0x2b, (uint8_t) 0x15, (uint8_t) 0x2b,
 		(uint8_t) 0x09, (uint8_t) 0x2b, (uint8_t) 0x4f, (uint8_t) 0x3c };
 
-//TODO should be stored in file?
-uint8_t credential_manager_key[16];
-uint8_t credential_manager_nonce[8];
+// Enough room for a largest Hidra message
+uint8_t messaging_buffer[65];
 
-uint16_t access_counter = 0;
+//General file structure is a concatenation of:
+//Pending subject number
+uint8_t sub_offset = 0;
+//Nonce3
+uint8_t nonce3_offset = 1;
 
-static void
-store_access_counter(uint8_t * nonce) {
-	access_counter = ((*nonce) << 8) | ((*(nonce+1)));
-}
-
-static uint8_t
-nonce_equals(uint16_t ctr, uint8_t * nonce) {
-	return ((ctr >> 8) == *nonce && (ctr & 0xff) == *(nonce+1));
-}
-
-static void
-get_access_counter(uint8_t * nonce) {
-	*nonce = access_counter >> 8;
-	*(nonce+1) = (access_counter & 0xff);
-}
-
-static void
-get_access_counter_increment(uint8_t * nonce) {
-	access_counter++;
-	*nonce = access_counter >> 8;
-	*(nonce+1) = (access_counter & 0xff);
-}
-
-//File structure is a concatenation of:
-//Nonce1 (8 bytes)
-int nonce1_offset;
-//TicketCM (26 bytes)
-int ticketcm_offset;
-//Kscm (16 bytes)
-int kscm_offset;
-//Noncescm (8 bytes)
-int noncescm_offset;
-//Nonce2 (8 bytes)
-int nonce2_offset;
-//TicketR (26 bytes)
-int ticketr_offset;
-//Ksr (16 bytes)
-int k_sr_offset;
-//Noncesr (8 bytes)
-int nonce_sr_offset;
-//Subkey (16 bytes)
-int subkey_offset;
-//Nonce4
-int nonce4_offset;
+uint8_t current_k_i_r_cm[16];
+uint8_t any_previous_key_chain_value_stored = 0;
 
 static void full_print_hex(const uint8_t* str, uint8_t length);
 static void print_hex(const uint8_t* str, uint8_t len);
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length);
-void compute_mac(uint8_t *key, const uint8_t *data, uint8_t datalen, uint8_t * final_digest);
-uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed);
+uint8_t is_next_in_chain(uint8_t * next, uint8_t *initial_msg, size_t initial_len);
+void md5(uint8_t * digest, uint8_t *initial_msg, size_t initial_len);
 
-PROCESS(hidra_subject,"HidraSubject");
-AUTOSTART_PROCESSES(&hidra_subject);
+uint8_t nb_of_associated_subjects;
+struct associated_subjects * associated_subjects;
+
+MEMB(alloc_associated_subjects, struct associated_subject, MAX_NUMBER_OF_SUBJECTS);
+
+struct associated_subject *
+associate_new_subject(uint8_t subject_id)
+{
+	struct associated_subject * current_subject = memb_alloc(&alloc_associated_subjects);
+	if(current_subject == NULL) {
+		return NULL;
+	}
+
+	current_subject->id = subject_id;
+	//printf("new subject id : %d\n", current_subject->id);
+	return current_subject;
+}
+
+void
+deassociate_subject(struct associated_subject *sub)
+{
+	memb_free(&alloc_associated_subjects, sub);
+}
+
+//MEMB(policies, struct policy, MAX_NUMBER_OF_SUBJECTS);
+//
+//struct policy *
+//store_policy(struct associated_subject * subject, uint8_t *policy_to_copy)
+//{
+//	struct policy * policy = memb_alloc(&policies);
+//	if(policy == NULL) {
+//		return NULL;
+//	}
+//	memcpy(policy->content, policy_to_copy, subject->policy_size);
+//	subject->policy = policy->content;
+//	return policy;
+//}
+//
+//void
+//delete_policy(struct policy *p)
+//{
+//	memb_free(&policies, p);
+//}
+
+struct nonce_sr {
+   uint8_t content[8];
+};
+
+/*
+ * Change policy related to subject with general DENY.
+ * If no associated subject exists with subject_id, return failure = 0
+ */
+uint8_t
+blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(assocs->subject_association_set[subject_index]->id == subject_id) {
+			uint8_t policy_id = get_char_from(0, assocs->subject_association_set[subject_index]->policy);
+
+			//Set enough memory to zero for the new policy (TODO actually redundant?)
+			memset(assocs->subject_association_set[subject_index]->policy, 0, 2);
+
+			// Same policy id
+			assocs->subject_association_set[subject_index]->policy[0] = policy_id;
+			// Deny everything, no extra rules.
+			assocs->subject_association_set[subject_index]->policy[1] = 0;
+			assocs->subject_association_set[subject_index]->policy_size = 2;
+
+			result = 1;
+		}
+	}
+	return result;
+}
+
+// For demo purposes
+unsigned char battery_level = 249;
+unsigned char nb_of_access_requests_made = 0;
+
+// For demo purposes, no distinction between different references is made
+struct reference {
+	uint8_t id;
+	uint8_t (*function_pointer) (void) ;
+	//TODO could be useful later: void (*pointer)() means: function pointer with unspecified number of argument.
+};
+
+//Space currently reserved for 10 references
+#define max_nb_of_references 5
+struct reference_table {
+	struct reference references[max_nb_of_references];
+} reference_table;
+
+static uint8_t
+low_battery() {
+	//printf("Checking battery level.\n");
+	return (battery_level <= 50);
+}
+
+static uint8_t
+log_request() {
+	//printf("Logging, i.e. incrementing nb_of_access_requests_made.\n");
+	nb_of_access_requests_made++;
+	return (0);
+}
+
+static uint8_t
+switch_light_on() {
+	leds_off(LEDS_ALL);
+	leds_on(LEDS_GREEN);
+	return (0);
+}
 
 static void
-receiver_resource(struct simple_udp_connection *c,
+initialize_reference_table()
+{
+	reference_table.references[0].id = 4;
+	reference_table.references[0].function_pointer = &low_battery;
+	reference_table.references[1].id = 9;
+	reference_table.references[1].function_pointer = &log_request;
+	reference_table.references[2].id = 18;
+	reference_table.references[2].function_pointer = &switch_light_on;
+}
+
+static struct reference *
+get_reference(uint8_t function)
+{
+	int reference_index = 0;
+	for (; reference_index < max_nb_of_references; reference_index++) {
+		if (reference_table.references[reference_index].id == function) {
+			return &reference_table.references[reference_index];
+		}
+	}
+	return NULL;
+}
+
+static uint8_t
+execute(uint8_t function)
+{
+	uint8_t (*func_ptr)(void) = get_reference(function)->function_pointer;
+	if (*func_ptr == NULL) {
+		printf("Something went wrong executing a function pointer.\n");
+		return 0;
+	} else {
+		return (*func_ptr)();
+	}
+}
+
+PROCESS(hidra_r,"HidraR");
+AUTOSTART_PROCESSES(&hidra_r);
+
+static void
+send_nack(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr)
+{
+	//printf("Sending NACK \n");
+
+	const char response = 0;
+	simple_udp_sendto(c, &response, 1, sender_addr);
+
+	// This turns on the red light, whenever anything is non-acknowledged
+	leds_off(LEDS_ALL);
+	leds_on(LEDS_RED);
+}
+
+static void
+send_ack(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr)
+{
+	//printf("Sending ACK to \n");
+
+	const char response = 1;
+	simple_udp_sendto(c, &response, 1, sender_addr);
+}
+
+static void
+send_access_nack(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		uint8_t subject_id)
+{
+	//printf("Sending NACK \n");
+
+	//Construct 3 bytes : (zero-byte) = 1 byte + (access counter+1) = 2 bytes
+	uint8_t response[3];
+	response[0] = 0;
+	get_access_counter_increment(subject_id, response + 1);
+
+	//Encrypt with session key
+	xcrypt_ctr(get_session_key(subject_id), response, 3);
+
+	simple_udp_sendto(c, response, sizeof(response), sender_addr);
+
+	// This turns on the red light, whenever anything is non-acknowledged
+	leds_off(LEDS_ALL);
+	leds_on(LEDS_RED);
+}
+
+static void
+send_access_ack(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		uint8_t subject_id)
+{
+	//printf("Sending ACK to \n");
+
+	//Construct 3 bytes : (zero-byte) = 1 byte + (access counter+1) = 2 bytes
+	uint8_t response[3];
+	response[0] = 1;
+	get_access_counter_increment(subject_id, response + 1);
+
+	//Encrypt with session key
+	xcrypt_ctr(get_session_key(subject_id), response, 3);
+
+	simple_udp_sendto(c, response, sizeof(response), sender_addr);
+}
+
+static uint8_t
+is_already_associated(uint8_t id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == id) {
+			result = 1;
+		}
+	}
+
+	return result;
+}
+
+//static void
+//set_hid_cm_ind_success(uint8_t id, uint8_t bit)
+//{
+//	int subject_index = 0;
+//	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+//		if(associated_subjects->subject_association_set[subject_index]->id == id) {
+//			associated_subjects->subject_association_set[subject_index]->hid_cm_ind_success = bit;
+//		}
+//	}
+//}
+
+static uint8_t
+hid_cm_ind_success(uint8_t id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == id &&
+				associated_subjects->subject_association_set[subject_index]->hid_cm_ind_success) {
+			result = 1;
+		}
+	}
+
+	return result;
+}
+
+static void
+set_hid_s_r_req_success(uint8_t id, uint8_t bit)
+{
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == id) {
+			associated_subjects->subject_association_set[subject_index]->hid_s_r_req_succes = bit;
+		}
+	}
+}
+
+/**
+ * Returns zero if the given id does not correspond to an associated subject
+ * Returns zero if the associated subject has not completed the HID_S_R_REQ message exchange yet
+ */
+static uint8_t
+hid_s_r_req_success(uint8_t id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == id &&
+				associated_subjects->subject_association_set[subject_index]->hid_s_r_req_succes) {
+			result = 1;
+		}
+	}
+
+	return result;
+}
+
+static void
+set_fresh_information(uint8_t subject_id, uint8_t bit)
+{
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id) {
+			associated_subjects->subject_association_set[subject_index]->fresh_information = bit;
+		}
+	}
+}
+
+static uint8_t
+fresh_information(uint8_t subject_id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id &&
+				associated_subjects->subject_association_set[subject_index]->fresh_information) {
+			result = 1;
+		}
+	}
+	return result;
+}
+
+static void
+set_hid_cm_ind_req_success(uint8_t subject_id, uint8_t bit)
+{
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id) {
+			associated_subjects->subject_association_set[subject_index]->hid_cm_ind_req_success = bit;
+		}
+	}
+}
+
+static uint8_t
+hid_cm_ind_req_success(uint8_t subject_id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id &&
+				associated_subjects->subject_association_set[subject_index]->hid_cm_ind_req_success) {
+			result = 1;
+		}
+	}
+	return result;
+}
+
+static uint8_t *
+get_session_key(uint8_t subject_id) {
+
+	int sub_index = 0;
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+		if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
+			return associated_subjects->subject_association_set[sub_index]->session_key;
+		}
+	}
+	return NULL;
+}
+
+static void
+set_session_key(uint8_t subject_id, uint8_t * key)
+{
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(associated_subjects->subject_association_set[subject_index]->id == subject_id) {
+			memcpy(
+				associated_subjects->subject_association_set[subject_index]->session_key,
+				key,
+				16
+			);
+		}
+	}
+}
+
+static uint8_t *
+get_nonce_sr(uint8_t subject_id) {
+
+	//printf("subject_id: %d\n", subject_id);
+	int sub_index = 0;
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+		if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
+			//printf("associated_subjects->subject_association_set[sub_index]->nonce_sr: \n");
+			//full_print_hex(associated_subjects->subject_association_set[sub_index]->nonce_sr, 8);
+			return associated_subjects->subject_association_set[sub_index]->nonce_sr;
+		}
+	}
+	return NULL;
+}
+
+static uint8_t
+set_nonce_sr(uint8_t subject_id, uint8_t *nonce) {
+
+	//printf("nonce: \n");
+	//full_print_hex(nonce, 8);
+
+	//printf("subject_id: %d\n", subject_id);
+	int sub_index = 0;
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+		if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
+			memcpy(
+					associated_subjects->subject_association_set[sub_index]->nonce_sr,
+					nonce,
+					8
+					);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void
+store_access_counter(uint8_t subject_id, uint8_t * nonce) {
+	//printf("Storing access counter: \n");
+	//full_print_hex(nonce, 2);
+
+	//printf("subject_id: %d\n", subject_id);
+	int sub_index = 0;
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+		if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
+			associated_subjects->subject_association_set[sub_index]->access_counter = ((*nonce) << 8) | ((*(nonce+1)));
+		}
+	}
+}
+
+static void
+get_access_counter_increment(uint8_t subject_id, uint8_t * nonce) {
+	//printf("subject_id: %d\n", subject_id);
+	int sub_index = 0;
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+		if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
+			associated_subjects->subject_association_set[sub_index]->access_counter++;
+			*nonce = associated_subjects->subject_association_set[sub_index]->access_counter >> 8;
+			*(nonce+1) = (associated_subjects->subject_association_set[sub_index]->access_counter & 0xff);
+			//printf("Get access counter increment: \n");
+			//full_print_hex(nonce, 2);
+		}
+	}
+}
+
+static uint8_t
+new_nonce_is_greater_than_counter(uint8_t subject_id, uint8_t * nonce) {
+	//printf("New counter: \n");
+	//full_print_hex(nonce, 2);
+
+	//printf("subject_id: %d\n", subject_id);
+	int sub_index = 0;
+	for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+		if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
+			//printf("(associated_subjects->subject_association_set[sub_index]->access_counter >> 8): %d\n", (associated_subjects->subject_association_set[sub_index]->access_counter >> 8));
+			//printf("*nonce: %d\n", *nonce);
+			//printf("(associated_subjects->subject_association_set[sub_index]->access_counter & 0xff): %d\n", (associated_subjects->subject_association_set[sub_index]->access_counter & 0xff));
+			//printf("*(nonce+1): %d\n", *(nonce+1));
+			if ((associated_subjects->subject_association_set[sub_index]->access_counter >> 8) > *nonce) {
+				return 0;
+			} else if (((associated_subjects->subject_association_set[sub_index]->access_counter >> 8) == *nonce) &&
+				((associated_subjects->subject_association_set[sub_index]->access_counter & 0xff) >= *(nonce+1))) {
+					return 0;
+			}
+		}
+	}
+	return 1;
+}
+
+static uint8_t
+condition_is_met(uint8_t *policy, int expression_bit_index)
+{
+	uint8_t function = get_char_from(expression_bit_index, policy);
+	expression_bit_index += 8;
+
+	uint8_t input_existence_mask = get_bit(expression_bit_index, policy);
+	if (input_existence_mask) {
+		printf("(function: condition_is_met) Did not expect a function with arguments.\n");
+	} else {
+		return execute(function);
+	}
+
+	printf("Error: Something went wrong with condition %d.\n", function);
+	return 0;
+}
+
+static void
+perform_task(uint8_t *policy, int task_bit_index)
+{
+	uint8_t function = get_char_from(task_bit_index, policy);
+	task_bit_index += 8;
+
+	uint8_t input_existence_mask = get_bit(task_bit_index, policy);
+	task_bit_index += 1;
+
+	if (input_existence_mask) {
+		printf("(function: perform_task) Did not expect a task with arguments.\n");
+	} else {
+		execute(function);
+		return;
+	}
+	printf("Error processing task %d.\n", function);
+}
+
+//Expectation: data points to value behind sub_id in the message. Data before the hash is padded to fit a full byte
+static uint8_t
+handle_subject_access_request(const uint8_t *data,
+        uint16_t datalen,
+        uint8_t sub_id)
+{
+	//printf("Handling subject %d access request\n", sub_id);
+	uint8_t * session_key = get_session_key(sub_id);
+	if (session_key == NULL) {
+		printf("Error: retrieving session key");
+	}
+
+	uint8_t message[datalen];
+	memcpy(message, data, datalen);
+
+	// Encrypt-and-MAC (E&M) => Decrypt-and-MAC
+	xcrypt_ctr(session_key, message + 2, datalen - 6);
+
+	uint8_t mac[4];
+	compute_mac(session_key, message, datalen - 4, mac);
+
+	if (memcmp(message + datalen - 4, mac, 4) == 0) {
+
+		int bit_index = 16;
+		uint8_t action = get_2_bits_from(bit_index, message);
+		bit_index += 2;
+		uint8_t function = get_char_from(bit_index, message);
+		bit_index += 8;
+
+		if (get_bit(bit_index, message)){
+			printf("Error: This demo does not expect any inputs\n");
+		}
+
+		if (new_nonce_is_greater_than_counter(sub_id, message + 4)) {
+			store_access_counter(sub_id, message + 4);
+
+			// print request (if it is the expected demo request)
+			if (action == 2 && function == 18) {
+//				printf("Receive a PUT light_switch_on request from subject %d.\n", sub_id);
+			} else if (action == 2 && function == 19) {
+//				printf("Receive a PUT light_switch_off request from subject %d.\n", sub_id);
+			} else {
+				printf("Did not receive the expected demo-request.\n");
+				return 0;
+			}
+
+			// Search for first policy associated with this subject
+			char exists = 0;
+			struct associated_subject *current_sub;
+			int sub_index = 0;
+			for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+				current_sub = associated_subjects->subject_association_set[sub_index];
+				if (current_sub->id == sub_id) {
+					exists = 1;
+					break;
+				}
+			}
+			if (exists) {
+
+//				eval_timestamp = RTIMER_NOW();
+
+				// Assumption for demo purposes: 1 single rule inside the policy
+				char rule_checks_out = 0;
+
+				// Search for rule about action PUT. TODO include action=ANY and rule without an action specified
+				if (!policy_has_at_least_one_rule(current_sub->policy)) {
+					rule_checks_out = get_policy_effect(current_sub->policy);
+				} else {
+					// Assumption for demo purposes: 1 single rule inside the policy
+					int rule_bit_index = 13;
+					if (rule_has_action(current_sub->policy, rule_bit_index)
+							&& rule_get_action(current_sub->policy, rule_bit_index) == action){
+						// Assumption for demo purposes: 1 single expression inside the rule
+						int exp_bit_index = rule_get_first_exp_index(current_sub->policy,rule_bit_index);
+						//Check condition
+						uint8_t condition_met = condition_is_met(current_sub->policy,exp_bit_index);
+						if (!condition_met && rule_get_effect(current_sub->policy, rule_bit_index) == 0) {
+	//						printf("Condition was met, therefore access is granted.\n");
+							rule_checks_out = 1;
+						} else if (condition_met && rule_get_effect(current_sub->policy, rule_bit_index) == 1) {
+	//						printf("Condition was not met, therefore access is granted.\n");
+							rule_checks_out = 1;
+						} else {
+	//						printf("Rule effect is %d, while condition result was %d => Access denied.\n", rule_get_effect(current_sub->policy, rule_bit_index), condition_is_met(current_sub->policy,exp_bit_index));
+						}
+						//Enforce obligations
+						if (rule_has_at_least_one_obligation(current_sub->policy, rule_bit_index)) {
+
+							// Assumption for demo purposes: 1 single obligation inside the rule
+							int obl_bit_index = rule_get_first_obl_index(current_sub->policy,rule_bit_index);
+
+							//Always execute task || Obligation has fulfill_on
+							if (!obligation_has_fulfill_on(current_sub->policy, obl_bit_index++)) {
+								perform_task(current_sub->policy,obl_bit_index);
+							}
+							//Check if existing fulfill_on matches rule outcome
+							else if (obligation_get_fulfill_on(current_sub->policy, obl_bit_index++) == rule_checks_out) {
+								perform_task(current_sub->policy,obl_bit_index);
+							}
+						}
+					}
+				}
+
+//				eval_timestamp = RTIMER_NOW() - eval_timestamp;
+//				printf("Evaluation time: %4lu rtimer ticks\n", eval_timestamp);
+
+				// Possibly perform operation and (non)acknowledge the subject
+				if (rule_checks_out) {
+
+					execute(function);
+
+					// Let's assume this operation requires a lot of battery
+					if (battery_level > 50) {
+						battery_level -= 50;
+						//printf("new battery level: %d\n", battery_level);
+					}
+					return 1;
+				} else {
+					printf("Request denied, because not all rules check out.\n");
+					return 0;
+				}
+
+			} else {
+				// deny if no association with subject exists
+				printf("Request denied, because no association with this subject exists.\n");
+				return 0;
+			}
+		} else {
+			printf("This is an old message, therefore it is discarded.\n");
+			return -1;
+		}
+	} else {
+		printf("Request denied, MAC does not match.\n");
+		return 0;
+	}
+}
+
+static uint8_t
+process_s_r_req(struct simple_udp_connection *c,
+        const uip_ipaddr_t *sender_addr,
+        const uint8_t *data,
+		uint16_t datalen) {
+//	static uint8_t messaging_buffer[60];
+	//printf("datalen %d == 60?\n", datalen);
+	memcpy(messaging_buffer, data, 60);
+	//printf("Full HID_S_R_REQ message: \n");
+	//full_print_hex(messaging_buffer, 60);
+
+	//printf("of which is encrypted ticketR: \n");
+	//full_print_hex(messaging_buffer, 26);
+
+	//printf("Encrypted ticketR, bit 8: \n");
+	//full_print_hex(messaging_buffer + 8, 1);
+
+	//Decrypt Ticket with resource key
+	xcrypt_ctr(resource_key, messaging_buffer, 26);
+
+	//printf("Decrypted ticketR: \n");
+	//full_print_hex(messaging_buffer, 26);
+
+	//printf("Decrypted ticketR, bit 8: \n");
+	//full_print_hex(messaging_buffer + 8, 1);
+
+
+	//Check subject id for association existence and protocol progress
+	uint8_t subject_id = messaging_buffer[17];
+	if (is_already_associated(subject_id) && hid_cm_ind_success(subject_id) && fresh_information(subject_id)) {
+		// Assumption: no access control attributes to check
+
+		static uint8_t ksr[16];
+		memcpy(ksr, messaging_buffer, 16);
+		//printf("Ksr: \n");
+		//full_print_hex(ksr, 16);
+
+		//printf("AuthNR before decryption: \n");
+		//full_print_hex(messaging_buffer + 26, 26);
+
+		// Use Ksr to decrypt AuthNr
+		xcrypt_ctr(ksr, messaging_buffer + 26, 26);
+
+		//printf("AuthNR after decryption: \n");
+		//full_print_hex(messaging_buffer + 26, 26);
+
+
+		// Check NonceSR from AuthNr against stored value
+		uint8_t * nonce_sr_from_storage = get_nonce_sr(subject_id);
+		if (nonce_sr_from_storage == NULL) {
+			printf("Error: retrieving nonceSR\n");
+			return 0;
+		}
+
+		//printf("nonce = messaging_buffer + 28: \n");
+		//full_print_hex(messaging_buffer + 28, 8);
+
+		if (memcmp(nonce_sr_from_storage, messaging_buffer + 28, 8) != 0) {
+			printf("Error: wrong NonceSR in AuthNr.\n");
+			return 0;
+		}
+
+		// Check NonceSR in the ticket against this same value
+		if (memcmp(nonce_sr_from_storage, messaging_buffer + 18, 8) != 0){
+			printf("Error: wrong NonceSR in ticketR.\n");
+			return 0;
+		}
+
+		// Check subject id again
+		if (memcmp(&subject_id, messaging_buffer + 27, 1) != 0) {
+			printf("Error: wrong subject id in AuthNr.\n");
+			return 0;
+		}
+
+		// Accept and store subkey/session key (in memory allocated for this subject)
+		set_session_key(subject_id, messaging_buffer + 36);
+
+		//Store access counter for freshness of future accesses
+		uint8_t zero[2];
+		memset(zero,0,2);
+		store_access_counter(subject_id, zero);
+
+		set_hid_s_r_req_success(subject_id, 1);
+
+//		printf("Constructing HID_S_R_REP message\n");
+		static uint8_t s_r_rep[32];
+		//Put NonceSR
+		memcpy(s_r_rep, nonce_sr_from_storage, 8);
+
+		//Put session key
+		memcpy(s_r_rep + 8, messaging_buffer + 36, 16);
+
+		//Put Nonce4
+		memcpy(s_r_rep + 24, messaging_buffer + 52, 8);
+
+		//Encrypt with ksr
+		xcrypt_ctr(messaging_buffer, s_r_rep, sizeof(s_r_rep));
+
+		// send this message
+		simple_udp_sendto(c, s_r_rep, 32, sender_addr);
+//		print_energest_data();
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+static void
+receiver_subject(struct simple_udp_connection *c,
          const uip_ipaddr_t *sender_addr,
          uint16_t sender_port,
          const uip_ipaddr_t *receiver_addr,
@@ -177,470 +889,328 @@ receiver_resource(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
-	const char * filename = "properties";
-
-	//Check session key
-	static uint8_t session_key[16];
-	int fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		cfs_seek(fd_read, subkey_offset, CFS_SEEK_SET);
-		cfs_read(fd_read, session_key, sizeof(session_key));
-		cfs_close(fd_read);
-	} else {
-		printf("Error: could not read session key from storage\n");
-	}
-
-	if (datalen == 32) {
-//		printf("s_r_req -> s_r_rep: %4lu ticks\n", clock_time() - timestamp);
+	//printf("Received data from subject %d with length %d\n", data[1], datalen);
+	//full_print_hex(data, datalen);
+	// Rough demo separator between access request and key establishment request
+	if (datalen > 20) {
+//		printf("wait for s_r_req: %4lu ticks\n", clock_time() - timestamp);
 //		timestamp = clock_time();
-		static uint8_t s_r_rep[32];
-		memcpy(s_r_rep, data, sizeof(s_r_rep));
-
-		//printf("Received HID_S_R_REP.\n");
-		//Decrypt message
-		static uint8_t ksr[16];
-		fd_read = cfs_open(filename, CFS_READ);
-		if(fd_read!=-1) {
-			cfs_seek(fd_read, k_sr_offset, CFS_SEEK_SET);
-			cfs_read(fd_read, ksr, sizeof(ksr));
-			cfs_close(fd_read);
-		} else {
-			printf("Error: could not read ksr key from storage\n");
+		uint8_t result = process_s_r_req(c, sender_addr, data, datalen);
+		if (!result) {
+			send_nack(c, sender_addr);
 		}
-
-		xcrypt_ctr(ksr, s_r_rep, sizeof(s_r_rep));
-
-		//Check NonceSR
-		static uint8_t nonce[8];
-		fd_read = cfs_open(filename, CFS_READ);
-		if(fd_read!=-1) {
-			cfs_seek(fd_read, nonce_sr_offset, CFS_SEEK_SET);
-			cfs_read(fd_read, nonce, sizeof(nonce));
-			cfs_close(fd_read);
-		} else {
-			printf("Error: could not read nonce_sr from storage\n");
-		}
-		if (memcmp(nonce, s_r_rep, 8) == 0){
-			//Check Nonce4
-			fd_read = cfs_open(filename, CFS_READ);
-			if(fd_read!=-1) {
-				cfs_seek(fd_read, nonce4_offset, CFS_SEEK_SET);
-				cfs_read(fd_read, nonce, sizeof(nonce));
-				cfs_close(fd_read);
-			} else {
-				printf("Error: could not read nonce4 from storage\n");
-			}
-			if (memcmp(nonce, s_r_rep + 24, 8) == 0){
-				if (memcmp(session_key, s_r_rep + 8, 16) != 0){
-					printf("Resource proposed different key\n");
-					//Store key
-
-				}
-				security_association_established = 1;
-//				printf("End of Successful Hidra Exchange.\n");
-//				unsigned long last_duration = clock_time() - timestamp;
-//				unsigned long duration = clock_time() - initial_timestamp;
-//				printf("s_r_req reception: %4lu ticks\n", clock_time() - timestamp);
-//				printf("It took %4lu ticks to complete the protocol\n", duration);
-//				print_energest_data();
-//				unsigned long r_duration = RTIMER_NOW() - r_timestamp;
-//				printf("That means about %4lu milliseconds \n", duration*7813/1000);
-//				printf("That means about %4lu milliseconds \n", (r_duration<<)/RTIMER_ARCH_SECOND);
-//				printf("That means about %4lu milliseconds \n", r_duration*145982196/100000000);
-			} else {
-				printf("Wrong Nonce4 HID_S_R_REP.\n");
-			}
-		} else {
-			printf("Wrong NonceSR HID_S_R_REP.\n");
-		}
-	} else if (datalen == 3) {
-//		printf("access request response: %4lu ticks\n", clock_time() - timestamp);
-//		timestamp = clock_time();
-		uint8_t access_response[3];
-		memcpy(access_response, data, sizeof(access_response));
-		xcrypt_ctr(session_key, access_response, sizeof(access_response));
-		if (nonce_equals(access_counter+1, access_response + 1)) {
-			store_access_counter(access_response + 1);
-			//printf("access_response[0]: %d\n", access_response[0]);
-//			printf("processed_response: %4lu ticks\n", clock_time() - timestamp);
-			if(access_response[0]){
-				//printf("Received Acknowledge.\n");
-			} else {
-				printf("Received Non-Acknowledge.\n");
-			}
-		} else {
-			printf("Not Nonce + i: Message out of sync.\n");
-		}
+//		printf("process s_r_req, send s_r_rep: %4lu ticks\n", clock_time() - timestamp);
 	} else {
-		if(data[0]){
-			//printf("Received Acknowledge.\n");
+//		timestamp = clock_time();
+		uint8_t subject_id = data[1];
+		if (hid_s_r_req_success(subject_id) && fresh_information(subject_id)) {
+			uint8_t result = handle_subject_access_request(data, datalen, subject_id);
+			if (result == -1) {
+				printf("Old message => ignored.\n");
+			} else if (result) {
+				send_access_ack(c, sender_addr, subject_id);
+			} else {
+				send_access_nack(c, sender_addr, subject_id);
+			}
 		} else {
-			printf("Received Non-Acknowledge.\n");
+			printf("Request denied, because no association with this subject exists.\n");
+			send_nack(c, sender_addr);
 		}
+//		printf("process access request: %4lu ticks\n", clock_time() - timestamp);
 	}
 }
 
 static void
-process_ans_rep(const uint8_t *data,
-        uint16_t datalen) {
-	const char * filename = "properties";
-
-	static uint8_t ans_rep[64];
-	memcpy(ans_rep, data, datalen);
-
-	//Store the encrypted TGT for the credential manager
-	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, ans_rep + 2, 26);
-		cfs_close(fd_write);
-		//printf("Successfully written ticket (%i bytes) to %s\n", n, filename);
-		//printf("\n");
-	} else {
-	  printf("Error: could not write ticket to storage.\n");
-	}
-
-	//printf("Encrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
-	uint8_t encrypted_index = 2 + 16 + 2 + 8;
-	full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
-
-	//Decrypt rest of message
-	xcrypt_ctr(subject_key, ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
-	//printf("Decrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
-	full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
-
-	static uint8_t nonce1[8];
-	int fd_read = cfs_open(filename, CFS_READ);
-	if (fd_read != -1) {
-		cfs_read(fd_read, nonce1, 8);
-		cfs_close(fd_read);
-	} else {
-		printf("Error: could not read nonce1 from storage.\n");
-	}
-	if (memcmp(ans_rep + encrypted_index + 24, nonce1, 8) == 0) {
-
-		//printf("Decrypted HID_ANS_REP, Kscm: \n");
-		full_print_hex(ans_rep+encrypted_index, 16);
-
-		//Store Kscm
-		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-		if(fd_write != -1) {
-			int n = cfs_write(fd_write, ans_rep + encrypted_index, 16);
-			cfs_close(fd_write);
-			//printf("Successfully written Kscm (%i bytes) to %s\n", n, filename);
-			//printf("\n");
-		} else {
-		   printf("Error: could not write Kscm to storage.\n");
-		}
-
-		//printf("Decrypted HID_ANS_REP, Noncescm: \n");
-		full_print_hex(ans_rep+encrypted_index+16, 8);
-
-		//Store Noncescm
-		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-		if(fd_write != -1) {
-			int n = cfs_write(fd_write, ans_rep + encrypted_index + 16, 8);
-			cfs_close(fd_write);
-			//printf("Successfully written Noncescm (%i bytes) to %s\n", n, filename);
-			//printf("\n");
-		} else {
-		   printf("Error: could not write Noncescm to storage.\n");
-		}
-
-		//Store pseudonym assigned to this subject
-		memcpy(pseudonym, ans_rep + encrypted_index + 34, 2);
-		//printf("Received pseudonym: \n");
-		full_print_hex(pseudonym, 2);
-
-	} else {
-		printf("Error: unsecure response, nonce1 does not match.\n");
-	}
-}
-
-static void
-construct_cm_req(uint8_t *cm_req) {
+construct_cm_ind_req(uint8_t *cm_ind_req) {
 	const char * filename = "properties";
 	//resource ID (2 bytes)
-	cm_req[0] = 0;
-	cm_req[1] = 2;
-	//Lifetime TR (1 byte)
-	cm_req[2] = 3;
-	//Nonce2 (8 bytes)
+	cm_ind_req[0] = 0;
+	cm_ind_req[1] = 2;
+
+	//Nonce3 (8 bytes)
 	uint16_t part_of_nonce = random_rand();
-	cm_req[3] = (part_of_nonce >> 8);
-	cm_req[4] = part_of_nonce & 0xffff;
+	cm_ind_req[2] = (part_of_nonce >> 8);
+	cm_ind_req[3] = part_of_nonce & 0xffff;
 	part_of_nonce = random_rand();
-	cm_req[5] = (part_of_nonce >> 8);
-	cm_req[6] = part_of_nonce & 0xffff;
+	cm_ind_req[4] = (part_of_nonce >> 8);
+	cm_ind_req[5] = part_of_nonce & 0xffff;
 	part_of_nonce = random_rand();
-	cm_req[7] = (part_of_nonce >> 8);
-	cm_req[8] = part_of_nonce & 0xffff;
+	cm_ind_req[6] = (part_of_nonce >> 8);
+	cm_ind_req[7] = part_of_nonce & 0xffff;
 	part_of_nonce = random_rand();
-	cm_req[9] = (part_of_nonce >> 8);
-	cm_req[10] = part_of_nonce & 0xffff;
-	//printf("Nonce2 \n");
-	full_print_hex(cm_req + 3, 8);
+	cm_ind_req[8] = (part_of_nonce >> 8);
+	cm_ind_req[9] = part_of_nonce & 0xffff;
+
+	//Store Nonce3 for later use
 	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write!=-1) {
-	  int n = cfs_write(fd_write, cm_req + 3, 8);
-	  cfs_close(fd_write);
-	//printf("Successfully written Nonce2 (%i bytes) to %s\n", n, filename);
-	//printf("\n");
+	if(fd_write != -1) {
+		int n = cfs_write(fd_write, cm_ind_req + 2, 8);
+		cfs_close(fd_write);
+		//printf("Successfully written Nonce3 (%i bytes) to %s\n", n, filename);
+		//printf("\n");
 	} else {
-	  printf("Error: could not write Nonce2 to storage.\n");
-	}
-	//Ticket granting ticket (26 bytes)
-	int fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		cfs_seek(fd_read, ticketcm_offset, CFS_SEEK_SET);
-		cfs_read(fd_read, cm_req + 11, 26);
-	  cfs_close(fd_read);
-	} else {
-	  printf("Error: could not read ticket from storage.\n");
-	}
-	//Generate AuthNM and add to byte array
-	//Pseudonym (2 bytes)
-	memcpy(cm_req + 37, pseudonym, 2);
-	//Noncescm + i, with i = 1
-	uint8_t i = 1;
-	fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		cfs_seek(fd_read, noncescm_offset, CFS_SEEK_SET);
-		cfs_read(fd_read, cm_req + 39, 8);
-		cfs_close(fd_read);
-	} else {
-		printf("Error: could not read noncescm from storage.\n");
-	}
-	uint16_t temp = (cm_req[45]<< 8) | (cm_req[46]);
-	temp += i;
-	cm_req[45] = (temp >> 8) & 0xff;
-	cm_req[46] = temp & 0xff;
-	full_print_hex(cm_req + 39, 8);
-
-	//Print unencrypted message for debugging purposes
-	//printf("Unencrypted CM_REQ message: \n");
-	full_print_hex(cm_req, 47);
-
-	static uint8_t kscm[16];
-	fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		cfs_seek(fd_read, kscm_offset, CFS_SEEK_SET);
-		cfs_read(fd_read, kscm, 16);
-		cfs_close(fd_read);
-	} else {
-		printf("Error: could not read kscm from storage.\n");
+	   printf("Error: could not write Nonce3 to memory.\n");
 	}
 
-	//Encrypt last 10 bytes of message
-	xcrypt_ctr(kscm, cm_req + 37, 10);
+	//Compute and fill MAC
+	static uint8_t array_to_mac[10]; //TODO should be doable without the extra array?
+	memcpy(array_to_mac, cm_ind_req, 10);
+
+	compute_mac(resource_key, array_to_mac, sizeof(array_to_mac), cm_ind_req + 10);
 }
 
 static uint8_t
-process_cm_rep(const uint8_t *data,
-        uint16_t datalen) {
+process_cm_ind(uint8_t subject_id,
+		const uint8_t *data,
+		uint16_t datalen) {
 	const char * filename = "properties";
-	//printf("HID_CM_REP content:\n");
-	static uint8_t cm_rep[62];
-	memcpy(cm_rep, data, datalen);
-	full_print_hex(cm_rep, sizeof(cm_rep));
 
-	//If valid id (=pseudonym)
-	if (memcmp(pseudonym, cm_rep, 2) == 0) {
-		//printf("ticketR: \n");
-		full_print_hex(cm_rep + 2, 26);
+//	static uint8_t messaging_buffer[73];
+//	printf("datalen %d, so policy is of length %d\n", datalen, datalen - 33);
+	memcpy(messaging_buffer, data, datalen);
+	printf("Full HID_CM_IND message: \n");
+	full_print_hex(messaging_buffer, sizeof(messaging_buffer));
 
-		//printf("ticketR, bit 8: \n");
-		full_print_hex(cm_rep + 10, 1);
+	uint8_t need_to_request_next_key = 0;
 
-		// Store ticketR
-		int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-		if(fd_write != -1) {
-			int n = cfs_write(fd_write, cm_rep + 2, 26);
-			cfs_close(fd_write);
-			//printf("Successfully written ticketR (%i bytes) to %s\n", n, filename);
-			//printf("\n");
-		} else {
-		  printf("Error: could not write ticketR to storage.\n");
+	if(same_mac(messaging_buffer + datalen - 4, messaging_buffer + 2, datalen - 6, resource_key)) {
+		if (nb_of_associated_subjects >= 10) {
+			printf("Oops, the number of associated subjects is currently set to 10.\n");
+		}
+		nb_of_associated_subjects++;
+
+		struct associated_subject *current_subject = associate_new_subject(subject_id);
+
+		if (current_subject == NULL) {
+			printf("Error in associate_new_subject(subject_id)\n");
 		}
 
-		// Get Kscm key from storage
-		static uint8_t kscm[16];
-		int fd_read = cfs_open(filename, CFS_READ);
-		if(fd_read!=-1) {
-			cfs_seek(fd_read, kscm_offset, CFS_SEEK_SET);
-			cfs_read(fd_read, kscm, 16);
-			cfs_close(fd_read);
-		} else {
-			printf("Error: could not read kscm from storage.\n");
+		associated_subjects->subject_association_set[nb_of_associated_subjects - 1] = current_subject;
+
+		// assign policy size based on knowledge about the rest of the message
+		current_subject->policy_size = datalen - 33;
+
+		// decrypt policy before storage
+		xcrypt_ctr(resource_key, messaging_buffer + 29, current_subject->policy_size);
+
+		// allocate memory and copy decrypted policy
+//		struct policy *p =  store_policy(current_subject, messaging_buffer + 29);
+//		if(p == NULL) {
+//			printf("Error in store_policy()\n");
+//		}
+
+		memcpy(current_subject->policy, messaging_buffer + 29, current_subject->policy_size);
+
+		//Ignore lifetime value
+
+		//Store nonce_sr for this subject
+		uint8_t n = set_nonce_sr(current_subject->id, messaging_buffer + 4);
+		if(n == 0) {
+			printf("Error in set_nonce_sr()\n");
 		}
 
-		// Decrypt last 34 bytes of message with Kscm
-		xcrypt_ctr(kscm, cm_rep + 28, 34);
+		if (!any_previous_key_chain_value_stored) {
+			current_subject->fresh_information = 0;
 
-		// Get Nonce2 from storage
-		static uint8_t nonce2[8];
-		fd_read = cfs_open(filename, CFS_READ);
-		if(fd_read!=-1) {
-			cfs_seek(fd_read, nonce2_offset, CFS_SEEK_SET);
-			cfs_read(fd_read, nonce2, 8);
-			cfs_close(fd_read);
+			//Write this value to memory
+			memcpy(current_k_i_r_cm, messaging_buffer + 13, 16);
+			any_previous_key_chain_value_stored = 1;
+
+			//Write subject id to file system to update freshness later on
+			int fd_write = cfs_open(filename, CFS_WRITE);
+			if(fd_write != -1) {
+				int n = cfs_write(fd_write, &subject_id, 1);
+				cfs_close(fd_write);
+				//printf("Successfully written subject id (%i bytes) to %s\n", n, filename);
+				//printf("\n");
+			} else {
+			   printf("Error: could not write subject id to memory.\n");
+			}
+			need_to_request_next_key = 1;
 		} else {
-			printf("Error: could not read Nonce2 from storage.\n");
-		}
 
-		// Check Nonce2 else return 0
-		if (memcmp(cm_rep + 52, nonce2, 8) != 0) {
-			printf("Error: not the Nonce2 that I sent in HID_CM_REQ.\n");
-			printf("From message\n");
-			full_print_hex(cm_rep + 52, 8);
-			printf("From storage\n");
-			full_print_hex(nonce2, 8);
+			//Check key chain value with stored value
+			static uint8_t new_key[16];
+			memcpy(new_key, messaging_buffer + 13, 16);
+
+			printf("new_key: \n");
+			full_print_hex(new_key, 16);
+			printf("current_k_i_r_cm: \n");
+			full_print_hex(current_k_i_r_cm, 16);
+
+			static uint8_t next_key[16];
+			md5(next_key, new_key, 16);
+			printf("next_key: \n");
+			full_print_hex(next_key, 16);
+
+			if (memcmp(current_k_i_r_cm, next_key, 16) == 0) {
+				//Store new value
+				memcpy(current_k_i_r_cm, new_key, 16);
+				printf("current_k_i_r_cm: \n");
+				full_print_hex(current_k_i_r_cm, 16);
+
+				//Get pending subject number for file system and update freshness
+				uint8_t subject_id = data[3];
+				set_fresh_information(subject_id, 1);
+				printf("Setting freshness of subject %d\n", subject_id);
+			} else {
+				printf("Error: Not a correct key, therefore subject information is not fresh \n");
+				need_to_request_next_key = 1;
+			}
+		}
+		current_subject->hid_cm_ind_success = 1;
+	} else {
+		printf("Incorrect MAC code\n");
+	}
+	return need_to_request_next_key;
+}
+
+static uint8_t
+process_cm_ind_rep(const uint8_t *data,
+		uint16_t datalen) {
+	const char * filename = "properties";
+	//printf("datalen %d == 22?\n", datalen);
+	printf("Processing HID_CM_IND_REP message\n");
+
+	// MAC calculation
+	static uint8_t for_mac[26];
+	memcpy(for_mac, data, 2);
+	//Get nonce 3 from storage
+	int fd_read = cfs_open(filename, CFS_READ);
+	if(fd_read!=-1) {
+	   cfs_seek(fd_read, nonce3_offset, CFS_SEEK_SET);
+	   cfs_read(fd_read, for_mac + 2, 8);
+	   cfs_close(fd_read);
+	 } else {
+	   printf("Error: could not read nonce from memory.\n");
+	 }
+	memcpy(for_mac + 10, data + 2, 16);
+
+	if(same_mac(data + 18, for_mac, 26, resource_key)) {
+		//Check key chain value with stored value
+		static uint8_t new_key[16];
+		memcpy(new_key, data + 2, 16);
+
+		printf("new_key: \n");
+		full_print_hex(new_key, 16);
+		printf("current_k_i_r_cm: \n");
+		full_print_hex(current_k_i_r_cm, 16);
+
+		static uint8_t next_key[16];
+		md5(next_key, new_key, 16);
+		printf("next_key: \n");
+		full_print_hex(next_key, 16);
+
+		if (memcmp(current_k_i_r_cm, next_key, 16) == 0) {
+			//Update stored keychain value
+			memcpy(current_k_i_r_cm, new_key, 16);
+			any_previous_key_chain_value_stored = 1;
+
+			//Get pending subject number for file system and update freshness
+			uint8_t subject_id;
+			fd_read = cfs_open(filename, CFS_READ);
+			if(fd_read!=-1) {
+				cfs_seek(fd_read, sub_offset, CFS_SEEK_SET);
+				cfs_read(fd_read, &subject_id, 1);
+				cfs_close(fd_read);
+				printf("Setting freshness of subject %d\n", subject_id);
+				set_fresh_information(subject_id, 1);
+				return 1;
+			} else {
+				printf("Error: could not read subject id from memory.\n");
+				return 0;
+			}
+		} else {
+			printf("Error: Not a correct key, therefore subject information is not fresh \n");
 			return 0;
-		} else {
-			//printf("Correct decryption of Nonce2 in HID_CM_REP.\n");
-			//printf("\n");
 		}
+	} else {
+		printf("Incorrect MAC code\n");
+		return 0;
+	}
+}
 
-		//printf("Ksr: \n");
-		full_print_hex(cm_rep + 28, 16);
-
-		// Store Ksr
-		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-		if(fd_write != -1) {
-			int n = cfs_write(fd_write, cm_rep + 28, 16);
-			cfs_close(fd_write);
-			//printf("Successfully written Ksr (%i bytes) to %s\n", n, filename);
-			//printf("\n");
+static uint8_t
+set_up_hidra_association_with_server(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+        uint16_t datalen)
+{
+	if (datalen < 33) {
+//		printf("travel + cm_ind_rep + travel: %4lu ticks\n", clock_time() - timestamp);
+//		timestamp = clock_time();
+		if (process_cm_ind_rep(data, datalen)) {
+//			send_ack(c, sender_addr);
 		} else {
-		  printf("Error: could not write Ksr to storage.\n");
+//			send_nack(c, sender_addr);
+			printf("Error: process_cm_ind_rep failed\n");
 		}
+//		printf("cm_ind_rep processing: %4lu ticks\n", clock_time() - timestamp);
+//		timestamp = clock_time();
 
-		//printf("nonceSR: \n");
-		full_print_hex(cm_rep + 44, 8);
+		//Clean up for next demo association (as it is at the moment)
+		const char * filename = "properties";
+		cfs_remove(filename);
+		printf("End of Hidra exchange with ACS for this subject\n");
+		return 1;
+	}
 
-		// Store Noncesr
-		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-		if(fd_write != -1) {
-			int n = cfs_write(fd_write, cm_rep + 44, 8);
-			cfs_close(fd_write);
-			//printf("Successfully written nonceSR (%i bytes) to %s\n", n, filename);
-			//printf("\n");
+	//printf("Subject id is %d \n", data[3]);
+	uint8_t subject_id = data[3];
+
+	// If this is the first exchange with the ACS: extract subject id and policy
+	if (!is_already_associated(subject_id)) {
+//		timestamp = clock_time();
+//		print_energest_data();
+		if (process_cm_ind(subject_id, data, datalen)) {
+			//Request previous key chain value at credential manager
+			static uint8_t response[14];
+			construct_cm_ind_req(response);
+			//Send message to credential manager
+			simple_udp_sendto(c, response, sizeof(response), sender_addr);
+//			printf("cm_ind procession + cm_ind_req construction: %4lu ticks\n", clock_time() - timestamp);
+//			timestamp = clock_time();
 		} else {
-		  printf("Error: could not write nonceSR to storage.\n");
+			set_fresh_information(subject_id, 1);
+			printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
+			printf("End of Hidra exchange with ACS for this subject\n");
 		}
+	}
+	else {
+		printf("Did not receive from ACS what was expected in the protocol.\n");
 	}
 	return 1;
 }
 
 static void
-construct_s_r_req(uint8_t *s_r_req) {
-	//printf("Constructing HID_S_R_REQ.\n");
-	const char * filename = "properties";
-	// Put ticketR in message from storage
-	int fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		cfs_seek(fd_read, ticketr_offset, CFS_SEEK_SET);
-		cfs_read(fd_read, s_r_req, 26);
-		cfs_close(fd_read);
+handle_policy_update(struct simple_udp_connection *c,
+		const uip_ipaddr_t *sender_addr,
+		const uint8_t *data,
+        uint16_t datalen,
+        int bit_index)
+{
+	uint8_t subject_id = get_char_from(bit_index, data);
+	bit_index += 8;
+
+//	printf("Updating policy : \n");
+	//Check if this subject is indeed found
+	if (is_already_associated(subject_id)) {
+		if (get_3_bits_from(bit_index, data) == 0) {
+			if (blacklist_subject(associated_subjects, subject_id)) {
+				//Answer with success message
+				send_ack(c, sender_addr);
+			} else {
+				//Answer with failure message
+				send_nack(c, sender_addr);
+			}
+		} else {
+			//Answer with failure message
+			send_nack(c, sender_addr);
+		}
 	} else {
-		printf("Error: could not read ticketR from storage.\n");
+		//Answer with failure message
+		send_nack(c, sender_addr);
 	}
-
-	// Put Pseudonym
-	memcpy(s_r_req + 26, pseudonym, 2);
-
-	// Get nonceSR from storage into message
-	fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		cfs_seek(fd_read, nonce_sr_offset, CFS_SEEK_SET);
-		cfs_read(fd_read, s_r_req + 28, 8);
-		cfs_close(fd_read);
-	} else {
-		printf("Error: could not read nonceSR from storage.\n");
-	}
-
-	//printf("NonceSR: \n");
-	full_print_hex(s_r_req + 28, 8);
-
-	// Generate session key to propose (16 bytes)
-	uint8_t start_of_key = 36;
-	uint16_t part_of_nonce = random_rand();
-	s_r_req[start_of_key] = (part_of_nonce >> 8);
-	s_r_req[1 + start_of_key] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[2 + start_of_key] = (part_of_nonce >> 8);
-	s_r_req[3 + start_of_key] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[4 + start_of_key] = (part_of_nonce >> 8);
-	s_r_req[5 + start_of_key] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[6 + start_of_key] = (part_of_nonce >> 8);
-	s_r_req[7 + start_of_key] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[8 + start_of_key] = (part_of_nonce >> 8);
-	s_r_req[9 + start_of_key] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[10 + start_of_key] = (part_of_nonce >> 8);
-	s_r_req[11 + start_of_key] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[12 + start_of_key] = (part_of_nonce >> 8);
-	s_r_req[13 + start_of_key] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[14 + start_of_key] = (part_of_nonce >> 8);
-	s_r_req[15 + start_of_key] = part_of_nonce & 0xffff;
-
-	// Store session key
-	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, s_r_req + start_of_key, 16);
-		cfs_close(fd_write);
-		//printf("Successfully written Subkey (%i bytes) to %s\n", n, filename);
-		//printf("\n");
-	} else {
-	  printf("Error: could not write Subkey to storage.\n");
-	}
-
-	// Get encryption key from storage
-	static uint8_t k_sr[16];
-	fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-		cfs_seek(fd_read, k_sr_offset, CFS_SEEK_SET);
-		cfs_read(fd_read, k_sr, 16);
-		cfs_close(fd_read);
-	} else {
-		printf("Error: could not read Ksr from storage.\n");
-	}
-
-	// Encrypt these 26 bytes (ID + Nonce + Key)
-	xcrypt_ctr(k_sr, s_r_req + 26, 26);
-
-	// Generate nonce4
-	uint8_t start_of_nonce = 52;
-	part_of_nonce = random_rand();
-	s_r_req[start_of_nonce] = (part_of_nonce >> 8);
-	s_r_req[1 + start_of_nonce] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[2 + start_of_nonce] = (part_of_nonce >> 8);
-	s_r_req[3 + start_of_nonce] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[4 + start_of_nonce] = (part_of_nonce >> 8);
-	s_r_req[5 + start_of_nonce] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	s_r_req[6 + start_of_nonce] = (part_of_nonce >> 8);
-	s_r_req[7 + start_of_nonce] = part_of_nonce & 0xffff;
-
-	// Store nonce4
-	fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, s_r_req + start_of_nonce, 8);
-		cfs_close(fd_write);
-		//printf("Successfully written Nonce4 (%i bytes) to %s\n", n, filename);
-		//printf("\n");
-	} else {
-	  printf("Error: could not write Nonce4 to storage.\n");
-	}
-
-	//So that in every new session, the counter is set to zero
-	access_counter = 0;
 }
 
 static void
@@ -652,173 +1222,16 @@ receiver_server(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
-	if (authentication_requested) {
-		if (!credentials_requested) {
-//			printf("ans_ -> ans_rep: %4lu ticks\n", clock_time() - timestamp);
-//			timestamp = clock_time();
-			// Perform phase 2
-			if(datalen != 64) {
-				printf("Error: different length of HID_ANS_REP packet: %d\n", datalen);
-			}
-			//Check Subject ID
-			if (get_char_from(8, data) == subject_id) {
-				//Process message from authentication server
-				process_ans_rep(data, datalen);
-				//Construct message for credential manager
-				static uint8_t response[47];
-				construct_cm_req(response);
-				//Send message to credential manager
-				simple_udp_sendto(&unicast_connection_server, response, sizeof(response), &server_addr);
-				//printf("Sent HID_CM_REQ\n");
-				credentials_requested = 1;
-//				printf("ans_rep -> cm_req: %4lu ticks\n", clock_time() - timestamp);
-//				timestamp = clock_time();
-			} else {
-				printf("Error: wrong subject id %d\n", get_char_from(8, data));
-			}
-		} else {
-//			printf("cm_req -> cm_rep: %4lu ticks\n", clock_time() - timestamp);
-//			timestamp = clock_time();
-			//Receive last step in phase 2
-			if (process_cm_rep(data, datalen) != 0) {
-				//Perform phase 3 exchange with resource
-				static uint8_t response[60];
-				construct_s_r_req(response);
-				//Send message to credential manager
-				simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
-				//printf("Sent HID_S_R_REQ\n");
-//				printf("cm_rep -> s_r_req: %4lu ticks\n", clock_time() - timestamp);
-//				timestamp = clock_time();
-			} else {
-				printf("Error while processing HID_CM_REP\n");
-			}
-		}
-	} else {
-		printf("Unexpected message from ACS\n");
-	}
-}
-
-static void
-start_hidra_protocol(void) {
-
-//	print_energest_data();
-
-//	timestamp = clock_time();
-
-//	initial_timestamp = clock_time();
-
-	static uint8_t ans_request[15];
-	const char *filename = "properties";
-
-//	r_timestamp = RTIMER_NOW();
-
-	// IdS (2 bytes)
-	ans_request[0] = 0;
-	ans_request[1] = subject_id;
-	// IdCM (2 bytes)
-	ans_request[2] = 0;
-	ans_request[3] = 0;
-	// LifetimeTGT (3 bytes)
-	ans_request[4] = 1;
-	ans_request[5] = 1;
-	ans_request[6] = 1;
-	//Nonce1 (8 bytes)
-	uint16_t part_of_nonce = random_rand();
-	ans_request[7] = (part_of_nonce >> 8);
-	ans_request[8] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	ans_request[9] = (part_of_nonce >> 8);
-	ans_request[10] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	ans_request[11] = (part_of_nonce >> 8);
-	ans_request[12] = part_of_nonce & 0xffff;
-	part_of_nonce = random_rand();
-	ans_request[13] = (part_of_nonce >> 8);
-	ans_request[14] = part_of_nonce & 0xffff;
-
-	//Store generated nonce
-	int fd_write = cfs_open(filename, CFS_WRITE);
-	if(fd_write != -1) {
-		int n = cfs_write(fd_write, ans_request + 7, 8);
-		cfs_close(fd_write);
-		//printf("Successfully written nonce1 (%i bytes) to %s\n", n, filename);
-		//printf("\n");
-	} else {
-	  printf("Error: could not write nonce1 to storage.\n");
-	}
-
-	//printf("Nonce1: \n");
-//	full_print_hex(ans_request + 7,8);
-	//printf("ANS request message: \n");
-	full_print_hex(ans_request,15);
-
-	simple_udp_sendto(&unicast_connection_server, ans_request, sizeof(ans_request), &server_addr);
-	authentication_requested = 1;
-
-//	printf("hid_req: %4lu ticks\n", clock_time() - timestamp);
-//	timestamp = clock_time();
-}
-
-static void
-send_access_request(void) {
-//	timestamp = clock_time();
-
-	uint8_t message_length = 7;
-	uint8_t response[message_length + 4];
-	const char *filename = "properties";
-	//Content of access request, all full bytes for simplicity
-	// = id (1 byte) + action (1 byte) + function:system_reference (1 byte) + input existence (1 bit) ( + inputs) + padding + hash (4 bytes)
-	memcpy(response, pseudonym, 2);
-	uint8_t action = 2;
-	uint8_t function = 18;
-	uint8_t input_existence = 0;
-	response[2] = (action << 6) | (function >> 2);
-	//printf("response[2] %d should be 132 \n", response[2]);
-	response[3] = (function << 6) | (input_existence >> 2); // with 5 padding zero-bits
-	//printf("response[3] %d should be 128 \n", response[3]);
-
-	// input existence boolean: if input exists, the bit is set to 1 and input couples <type,value> follow
-
-	//Put incremented access counter in message
-	get_access_counter_increment(response + 4);
-
-	//Get session key from storage
-	static uint8_t session_key[16];
-	int fd_read = cfs_open(filename, CFS_READ);
-	if(fd_read!=-1) {
-	   cfs_seek(fd_read, subkey_offset, CFS_SEEK_SET);
-	   cfs_read(fd_read, session_key, sizeof(session_key));
-	   cfs_close(fd_read);
-	 } else {
-	   printf("Error: could not read session key from storage\n");
-	 }
-
-	// Calculate 4 byte mac of action + function + rest
-	compute_mac(session_key, response, message_length, response + message_length);
-
-	// Encrypt-and-MAC (E&M)
-	// Encrypt all bytes except the first 2 (pseudonym) and the last 4 (MAC)
-	xcrypt_ctr(session_key, response + 2, sizeof(response) - 6);
-
-
-	//TODO nieuwe hmac/hash van alles, maar subject id niet encrypteren, anders heeft resource geen idee welke sleutel te gebruiken
-	simple_udp_sendto(&unicast_connection_resource, response, sizeof(response), &resource_addr);
-	resource_access_requested = 1;
-
-//	printf("construct access_request: %4lu ticks\n", clock_time() - timestamp);
-//	timestamp = clock_time();
-}
-
-static void
-set_resource_address(void)
-{
-	uip_ip6addr(&resource_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0xc30c, 0, 0, 0x2);
-}
-
-static void
-set_server_address(void)
-{
-	uip_ip6addr(&server_addr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0x1);
+  //The first byte indicates the purpose of this message from the trusted server
+  if (data[0]) {
+	  if (is_already_associated(data[2])) {
+		  handle_policy_update(c, sender_addr, data+1, datalen-1, 0);
+	  } else {
+		  printf("Trying to update a policy of a non-associated subject. \n");
+	  }
+  } else {
+	  set_up_hidra_association_with_server(c, sender_addr, data+1, datalen-1);
+  }
 }
 
 static uip_ipaddr_t *
@@ -841,108 +1254,35 @@ set_global_address(void)
       printf("\n");
     }
   }
+
   return &ipaddr;
 }
 
-PROCESS_THREAD(hidra_subject, ev, data)
+PROCESS_THREAD(hidra_r, ev, data)
 {
-	static struct etimer periodic_timer;
-
 	PROCESS_BEGIN();
 
-//	print_energest_data();
+//	SENSORS_ACTIVATE(button_sensor);
 
-	SENSORS_ACTIVATE(button_sensor);
+	set_global_address();
 
-//	clock_init();
-
-//	static int i = 4;
-//	etimer_set(&periodic_timer, CLOCK_SECOND * 2);
-//	while(i--) {
-//		print_energest_data();
-//		PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
-//		etimer_reset(&periodic_timer);
-//	}
-//	random_init();
-
-	//use global address to deduce node-id
-	subject_id = set_global_address()->u8[15];
-	//use subject id to customize key
-	subject_key[15] = subject_id;
-
-	set_resource_address();
-	set_server_address();
-
-//	test_file_operations();
-
+	// Register a sockets, with the correct host and remote ports
+	// NULL parameter as the destination address to allow packets from any address. (fixed IPv6 address can be given)
 	simple_udp_register(&unicast_connection_server, SERVER_UDP_PORT,
 						  NULL, SERVER_UDP_PORT,
 						  receiver_server);
+	simple_udp_register(&unicast_connection_subject, SUBJECT_UDP_PORT,
+							  NULL, SUBJECT_UDP_PORT,
+							  receiver_subject);
+//	printf("result socket: %d\n", result);
+	nb_of_associated_subjects = 0;
 
-	simple_udp_register(&unicast_connection_resource, RESOURCE_UDP_PORT,
-						  NULL, RESOURCE_UDP_PORT,
-						  receiver_resource);
+	initialize_reference_table();
 
-	//File structure is a concatenation of:
-	//Nonce1 (8 bytes)
-	nonce1_offset = 0;
-	//TicketCM (26 bytes)
-	ticketcm_offset = nonce1_offset + 8;
-	//Kscm (16 bytes)
-	kscm_offset = ticketcm_offset + 26;
-	//Noncescm (8 bytes)
-	noncescm_offset = kscm_offset + 16;
-	//Nonce2 (8 bytes)
-	nonce2_offset = noncescm_offset + 8;
-	//TicketR (26 bytes)
-	ticketr_offset = nonce2_offset + 8;
-	//Ksr (16 bytes)
-	k_sr_offset = ticketr_offset + 26;
-	//Noncesr (8 bytes)
-	nonce_sr_offset = k_sr_offset + 16;
-	//Subkey (16 bytes)
-	subkey_offset = nonce_sr_offset + 8;
-	//Nonce4
-	nonce4_offset = subkey_offset + 16;
-
-
-	uint8_t testing = 0;
 	while(1) {
 		PROCESS_WAIT_EVENT();
-//		if (etimer_expired(&periodic_timer)) {
-//			clock_time_t clock_time(); // Get the system time.
-//			unsigned long clock_seconds(); // Get the system time in seconds.
-//			void clock_delay(unsigned int delay); // Delay the CPU.
-//			void clock_wait(int delay); // Delay the CPU for a number of clock ticks.
-//			void clock_init(void); // Initialize the clock module.
-//			CLOCK_SECOND; // The number of ticks per second.
-//			printf("clock_time(), i.e. ticks: %4lu\n", clock_time());//return unsigned long
-//			printf("clock_seconds: %4lus\n", clock_seconds());
-
-//			clock_set_seconds(unsigned long sec) //TODO test dit + print clock_seconds hierna
-
-//			printf("RTIMER_ARCH_SECOND: %4lu ticks\n", RTIMER_ARCH_SECOND);
-//			printf("CLOCK_SECOND: %4lu ticks\n", CLOCK_SECOND);
-//			etimer_reset(&periodic_timer);
-//		}
-
-		if ((ev==sensors_event) && (data == &button_sensor)) {
-			if (testing) {
-//				printf("clock_time(), i.e. ticks: %4lu\n", clock_time());//return unsigned long
-//				printf("clock_seconds: %4lus\n", clock_seconds());
-//				printf("RTIMER_ARCH_SECOND: %4lu ticks\n", RTIMER_ARCH_SECOND);
-//				printf("RTIMER_SECOND: %4lu ticks\n", RTIMER_SECOND);
-//				printf("CLOCK_SECOND: %4lu ticks\n", CLOCK_SECOND);
-			}
-
-			else if (!security_association_established) {
-				printf("Starting Hidra Protocol\n");
-				start_hidra_protocol();
-			} else {
-				send_access_request();
-			}
-		}
 	}
+
 	PROCESS_END();
 }
 
@@ -967,22 +1307,35 @@ void compute_mac(uint8_t *key, const uint8_t *data, uint8_t datalen, uint8_t * f
 	final_digest[3] = hashed & 0xff;
 }
 
+//Assumption about length of hash: 4
+uint8_t
+same_mac(const uint8_t * hashed_value, uint8_t * array_to_check, uint8_t length_in_bytes, uint8_t *key) {
+	static uint8_t digest[4];
+	compute_mac(key, array_to_check, length_in_bytes, digest);
+
+	return (digest[0] == hashed_value[0] &&
+			digest[1] == hashed_value[1] &&
+			digest[2] == hashed_value[2] &&
+			digest[3] == hashed_value[3]);
+}
+
 static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 {
-	uint8_t iv[16]  = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
-	static struct AES_ctx ctx;
+	static uint8_t iv[16]  = { 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f };
+	struct AES_ctx ctx;
 
 	AES_init_ctx_iv(&ctx, key, iv);
 	AES_CTR_xcrypt_buffer(&ctx, in, length);
 }
 
 static void full_print_hex(const uint8_t* str, uint8_t length) {
-//	int i = 0;
-//	for (; i < (length/16) ; i++) {
-//		print_hex(str + i * 16, 16);
-//	}
-//	print_hex(str + i * 16, length%16);
-//	printf("\n");
+	printf("********************************\n");
+	int i = 0;
+	for (; i < (length/16) ; i++) {
+		print_hex(str + i * 16, 16);
+	}
+	print_hex(str + i * 16, length%16);
+	printf("********************************\n");
 }
 
 // prints string as hex
@@ -993,7 +1346,6 @@ static void print_hex(const uint8_t* str, uint8_t len)
         printf("%.2x", str[i]);
     printf("\n");
 }
-
 
 //////////////////////////////////////////
 //CODE FROM tiny AES PROJECT
@@ -1133,7 +1485,7 @@ static uint8_t getSBoxInvert(uint8_t num)
 // This function produces Nb(Nr+1) round keys. The round keys are used in each round to decrypt the states.
 static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)
 {
-  unsigned i, j, k;
+  uint32_t i, j, k; //TODO warning: if AES stops working, put back to 'unsigned', but this shouldn't make a difference
   uint8_t tempa[4]; // Used for the column/row operations
 
   // The first round key is the key itself.
@@ -1499,6 +1851,7 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
     buf[i] = (buf[i] ^ buffer[bi]);
   }
 }
+
 //END OF CODE FROM tiny AES PROJECT
 /////////////////////////////////////////
 
@@ -1506,7 +1859,7 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 {
 	//printf("Values to hash\n");
-	full_print_hex(key, len);
+	//full_print_hex(key, len);
 	uint32_t h = seed;
 	if (len > 3) {
 		const uint32_t* key_x4 = (const uint32_t*) key;
