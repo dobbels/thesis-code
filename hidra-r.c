@@ -95,6 +95,7 @@ print_energest_data(void) {
 
 unsigned long eval_timestamp;
 unsigned long timestamp;
+unsigned long r_timestamp2;
 
 #define SERVER_UDP_PORT 1234
 #define SUBJECT_UDP_PORT 1996
@@ -778,6 +779,20 @@ process_s_r_req(struct simple_udp_connection *c,
         const uip_ipaddr_t *sender_addr,
         const uint8_t *data,
 		uint16_t datalen) {
+
+//	unsigned long duration;
+//	r_timestamp2 = RTIMER_NOW();
+//
+//	if (r_timestamp2 > eval_timestamp) {
+//		duration = r_timestamp2 -eval_timestamp;
+//		printf("Delay of %4lu rtimer ticks\n", duration);
+//	} else {
+//		//The overflowtime of rtime is 2 seconds
+//		duration = (65536 - eval_timestamp) + r_timestamp2;
+//		printf("Delay of %4lu overflowed rtimer ticks\n", duration);
+//	}
+
+
 //	static uint8_t messaging_buffer[60];
 	//printf("datalen %d == 60?\n", datalen);
 	memcpy(messaging_buffer, data, 60);
@@ -968,8 +983,8 @@ process_cm_ind(uint8_t subject_id,
 //	static uint8_t messaging_buffer[73];
 //	printf("datalen %d, so policy is of length %d\n", datalen, datalen - 33);
 	memcpy(messaging_buffer, data, datalen);
-	printf("Full HID_CM_IND message: \n");
-	full_print_hex(messaging_buffer, sizeof(messaging_buffer));
+//	printf("Full HID_CM_IND message: \n");
+	//full_print_hex(messaging_buffer, sizeof(messaging_buffer));
 
 	uint8_t need_to_request_next_key = 0;
 
@@ -1033,26 +1048,27 @@ process_cm_ind(uint8_t subject_id,
 			static uint8_t new_key[16];
 			memcpy(new_key, messaging_buffer + 13, 16);
 
-			printf("new_key: \n");
-			full_print_hex(new_key, 16);
-			printf("current_k_i_r_cm: \n");
-			full_print_hex(current_k_i_r_cm, 16);
+//			printf("new_key: \n");
+			//full_print_hex(new_key, 16);
+//			printf("current_k_i_r_cm: \n");
+			//full_print_hex(current_k_i_r_cm, 16);
 
 			static uint8_t next_key[16];
 			md5(next_key, new_key, 16);
-			printf("next_key: \n");
-			full_print_hex(next_key, 16);
+//			printf("next_key: \n");
+			//full_print_hex(next_key, 16);
 
 			if (memcmp(current_k_i_r_cm, next_key, 16) == 0) {
 				//Store new value
 				memcpy(current_k_i_r_cm, new_key, 16);
-				printf("current_k_i_r_cm: \n");
-				full_print_hex(current_k_i_r_cm, 16);
+//				printf("current_k_i_r_cm: \n");
+				//full_print_hex(current_k_i_r_cm, 16);
 
 				//Get pending subject number for file system and update freshness
 				uint8_t subject_id = data[3];
 				set_fresh_information(subject_id, 1);
-				printf("Setting freshness of subject %d\n", subject_id);
+//				printf("Setting freshness of subject %d\n", subject_id);
+//				eval_timestamp = RTIMER_NOW();
 			} else {
 				printf("Error: Not a correct key, therefore subject information is not fresh \n");
 				need_to_request_next_key = 1;
@@ -1070,7 +1086,7 @@ process_cm_ind_rep(const uint8_t *data,
 		uint16_t datalen) {
 	const char * filename = "properties";
 	//printf("datalen %d == 22?\n", datalen);
-	printf("Processing HID_CM_IND_REP message\n");
+//	printf("Processing HID_CM_IND_REP message\n");
 
 	// MAC calculation
 	static uint8_t for_mac[26];
@@ -1091,15 +1107,15 @@ process_cm_ind_rep(const uint8_t *data,
 		static uint8_t new_key[16];
 		memcpy(new_key, data + 2, 16);
 
-		printf("new_key: \n");
-		full_print_hex(new_key, 16);
-		printf("current_k_i_r_cm: \n");
-		full_print_hex(current_k_i_r_cm, 16);
+//		printf("new_key: \n");
+		//full_print_hex(new_key, 16);
+		//printf("current_k_i_r_cm: \n");
+		//full_print_hex(current_k_i_r_cm, 16);
 
 		static uint8_t next_key[16];
 		md5(next_key, new_key, 16);
-		printf("next_key: \n");
-		full_print_hex(next_key, 16);
+		//printf("next_key: \n");
+		//full_print_hex(next_key, 16);
 
 		if (memcmp(current_k_i_r_cm, next_key, 16) == 0) {
 			//Update stored keychain value
@@ -1113,8 +1129,9 @@ process_cm_ind_rep(const uint8_t *data,
 				cfs_seek(fd_read, sub_offset, CFS_SEEK_SET);
 				cfs_read(fd_read, &subject_id, 1);
 				cfs_close(fd_read);
-				printf("Setting freshness of subject %d\n", subject_id);
+				//printf("Setting freshness of subject %d\n", subject_id);
 				set_fresh_information(subject_id, 1);
+//				eval_timestamp = RTIMER_NOW();
 				return 1;
 			} else {
 				printf("Error: could not read subject id from memory.\n");
@@ -1151,7 +1168,7 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 		//Clean up for next demo association (as it is at the moment)
 		const char * filename = "properties";
 		cfs_remove(filename);
-		printf("End of Hidra exchange with ACS for this subject\n");
+		//printf("End of Hidra exchange with ACS for this subject\n");
 		return 1;
 	}
 
@@ -1172,8 +1189,8 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 //			timestamp = clock_time();
 		} else {
 			set_fresh_information(subject_id, 1);
-			printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
-			printf("End of Hidra exchange with ACS for this subject\n");
+			//printf("Processed HID_CM_IND and did not need HID_CM_IND_REQ to request new key.\n");
+			//printf("End of Hidra exchange with ACS for this subject\n");
 		}
 	}
 	else {

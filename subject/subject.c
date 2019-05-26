@@ -78,6 +78,7 @@ print_energest_data(void) {
 unsigned long initial_timestamp;
 unsigned long timestamp;
 unsigned long r_timestamp;
+unsigned long r_timestamp2;
 
 // To print the IPv6 addresses in a friendlier way
 #include "debug.h"
@@ -240,6 +241,15 @@ receiver_resource(struct simple_udp_connection *c,
 //				printf("End of Successful Hidra Exchange.\n");
 //				unsigned long last_duration = clock_time() - timestamp;
 //				unsigned long duration = clock_time() - initial_timestamp;
+				r_timestamp2 = RTIMER_NOW();
+				unsigned long duration;
+				if (r_timestamp2 > r_timestamp) {
+					duration = r_timestamp2 - r_timestamp;
+				} else {
+					//The overflowtime of rtime is 2 seconds
+					duration = (65536 - r_timestamp) + r_timestamp2;
+				}
+				printf("Rest of the protocol: %4lu rtimer ticks\n", duration);
 //				printf("s_r_req reception: %4lu ticks\n", clock_time() - timestamp);
 //				printf("It took %4lu ticks to complete the protocol\n", duration);
 //				print_energest_data();
@@ -266,7 +276,7 @@ receiver_resource(struct simple_udp_connection *c,
 			if(access_response[0]){
 				//printf("Received Acknowledge.\n");
 			} else {
-				printf("Received Non-Acknowledge.\n");
+//				printf("Received Non-Acknowledge.\n");
 			}
 		} else {
 			printf("Not Nonce + i: Message out of sync.\n");
@@ -301,12 +311,12 @@ process_ans_rep(const uint8_t *data,
 
 	//printf("Encrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
 	uint8_t encrypted_index = 2 + 16 + 2 + 8;
-	full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
+	//full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
 
 	//Decrypt rest of message
 	xcrypt_ctr(subject_key, ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
 	//printf("Decrypted HID_ANS_REP content (leaving out the first 28 bytes: IDs and TGT):\n");
-	full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
+	//full_print_hex(ans_rep+encrypted_index, sizeof(ans_rep) - encrypted_index);
 
 	static uint8_t nonce1[8];
 	int fd_read = cfs_open(filename, CFS_READ);
@@ -319,7 +329,7 @@ process_ans_rep(const uint8_t *data,
 	if (memcmp(ans_rep + encrypted_index + 24, nonce1, 8) == 0) {
 
 		//printf("Decrypted HID_ANS_REP, Kscm: \n");
-		full_print_hex(ans_rep+encrypted_index, 16);
+		//full_print_hex(ans_rep+encrypted_index, 16);
 
 		//Store Kscm
 		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
@@ -333,7 +343,7 @@ process_ans_rep(const uint8_t *data,
 		}
 
 		//printf("Decrypted HID_ANS_REP, Noncescm: \n");
-		full_print_hex(ans_rep+encrypted_index+16, 8);
+		//full_print_hex(ans_rep+encrypted_index+16, 8);
 
 		//Store Noncescm
 		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
@@ -349,7 +359,18 @@ process_ans_rep(const uint8_t *data,
 		//Store pseudonym assigned to this subject
 		memcpy(pseudonym, ans_rep + encrypted_index + 34, 2);
 		//printf("Received pseudonym: \n");
-		full_print_hex(pseudonym, 2);
+		//full_print_hex(pseudonym, 2);
+
+		r_timestamp2 = RTIMER_NOW();
+		unsigned long duration;
+		if (r_timestamp2 > r_timestamp) {
+			duration = r_timestamp2 - r_timestamp;
+		} else {
+			//The overflowtime of rtime is 2 seconds
+			duration = (65536 - r_timestamp) + r_timestamp2;
+		}
+		printf("First two exchanges: %4lu rtimer ticks\n", duration);
+		r_timestamp = RTIMER_NOW();
 
 	} else {
 		printf("Error: unsecure response, nonce1 does not match.\n");
@@ -378,7 +399,7 @@ construct_cm_req(uint8_t *cm_req) {
 	cm_req[9] = (part_of_nonce >> 8);
 	cm_req[10] = part_of_nonce & 0xffff;
 	//printf("Nonce2 \n");
-	full_print_hex(cm_req + 3, 8);
+	//full_print_hex(cm_req + 3, 8);
 	int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
 	if(fd_write!=-1) {
 	  int n = cfs_write(fd_write, cm_req + 3, 8);
@@ -414,11 +435,11 @@ construct_cm_req(uint8_t *cm_req) {
 	temp += i;
 	cm_req[45] = (temp >> 8) & 0xff;
 	cm_req[46] = temp & 0xff;
-	full_print_hex(cm_req + 39, 8);
+	//full_print_hex(cm_req + 39, 8);
 
 	//Print unencrypted message for debugging purposes
 	//printf("Unencrypted CM_REQ message: \n");
-	full_print_hex(cm_req, 47);
+	//full_print_hex(cm_req, 47);
 
 	static uint8_t kscm[16];
 	fd_read = cfs_open(filename, CFS_READ);
@@ -441,15 +462,15 @@ process_cm_rep(const uint8_t *data,
 	//printf("HID_CM_REP content:\n");
 	static uint8_t cm_rep[62];
 	memcpy(cm_rep, data, datalen);
-	full_print_hex(cm_rep, sizeof(cm_rep));
+	//full_print_hex(cm_rep, sizeof(cm_rep));
 
 	//If valid id (=pseudonym)
 	if (memcmp(pseudonym, cm_rep, 2) == 0) {
 		//printf("ticketR: \n");
-		full_print_hex(cm_rep + 2, 26);
+		//full_print_hex(cm_rep + 2, 26);
 
 		//printf("ticketR, bit 8: \n");
-		full_print_hex(cm_rep + 10, 1);
+		//full_print_hex(cm_rep + 10, 1);
 
 		// Store ticketR
 		int fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
@@ -491,9 +512,9 @@ process_cm_rep(const uint8_t *data,
 		if (memcmp(cm_rep + 52, nonce2, 8) != 0) {
 			printf("Error: not the Nonce2 that I sent in HID_CM_REQ.\n");
 			printf("From message\n");
-			full_print_hex(cm_rep + 52, 8);
+			//full_print_hex(cm_rep + 52, 8);
 			printf("From storage\n");
-			full_print_hex(nonce2, 8);
+			//full_print_hex(nonce2, 8);
 			return 0;
 		} else {
 			//printf("Correct decryption of Nonce2 in HID_CM_REP.\n");
@@ -501,7 +522,7 @@ process_cm_rep(const uint8_t *data,
 		}
 
 		//printf("Ksr: \n");
-		full_print_hex(cm_rep + 28, 16);
+		//full_print_hex(cm_rep + 28, 16);
 
 		// Store Ksr
 		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
@@ -515,7 +536,7 @@ process_cm_rep(const uint8_t *data,
 		}
 
 		//printf("nonceSR: \n");
-		full_print_hex(cm_rep + 44, 8);
+		//full_print_hex(cm_rep + 44, 8);
 
 		// Store Noncesr
 		fd_write = cfs_open(filename, CFS_WRITE | CFS_APPEND);
@@ -559,7 +580,7 @@ construct_s_r_req(uint8_t *s_r_req) {
 	}
 
 	//printf("NonceSR: \n");
-	full_print_hex(s_r_req + 28, 8);
+	//full_print_hex(s_r_req + 28, 8);
 
 	// Generate session key to propose (16 bytes)
 	uint8_t start_of_key = 36;
@@ -707,6 +728,8 @@ start_hidra_protocol(void) {
 
 //	initial_timestamp = clock_time();
 
+	r_timestamp = RTIMER_NOW();
+
 	static uint8_t ans_request[15];
 	const char *filename = "properties";
 
@@ -748,9 +771,9 @@ start_hidra_protocol(void) {
 	}
 
 	//printf("Nonce1: \n");
-//	full_print_hex(ans_request + 7,8);
+//	//full_print_hex(ans_request + 7,8);
 	//printf("ANS request message: \n");
-	full_print_hex(ans_request,15);
+	//full_print_hex(ans_request,15);
 
 	simple_udp_sendto(&unicast_connection_server, ans_request, sizeof(ans_request), &server_addr);
 	authentication_requested = 1;
@@ -849,6 +872,30 @@ PROCESS_THREAD(hidra_subject, ev, data)
 	static struct etimer periodic_timer;
 
 	PROCESS_BEGIN();
+
+	//RTIMER OVERFLOW TEST
+//	unsigned long duration;
+//
+//	etimer_set(&periodic_timer, CLOCK_SECOND/2);
+//	while(1) {
+//
+//		PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
+//		etimer_reset(&periodic_timer);
+//
+//		r_timestamp2 = RTIMER_NOW();
+//
+//		if (r_timestamp2 > r_timestamp) {
+//			duration = r_timestamp2 - r_timestamp;
+//			printf("%4lu rtimer ticks\n", duration);
+//		} else {
+//			//The overflowtime of rtime is 2 seconds
+//			duration = (65536 - r_timestamp) + r_timestamp2;
+//			printf("%4lu overflowed rtimer ticks\n", duration);
+//		}
+//
+//		r_timestamp = RTIMER_NOW();
+//
+//	}
 
 //	print_energest_data();
 
@@ -977,12 +1024,12 @@ static void xcrypt_ctr(uint8_t *key, uint8_t *in, uint32_t length)
 }
 
 static void full_print_hex(const uint8_t* str, uint8_t length) {
-//	int i = 0;
-//	for (; i < (length/16) ; i++) {
-//		print_hex(str + i * 16, 16);
-//	}
-//	print_hex(str + i * 16, length%16);
-//	printf("\n");
+	int i = 0;
+	for (; i < (length/16) ; i++) {
+		print_hex(str + i * 16, 16);
+	}
+	print_hex(str + i * 16, length%16);
+	printf("\n");
 }
 
 // prints string as hex
@@ -1506,7 +1553,7 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, uint32_t length)
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
 {
 	//printf("Values to hash\n");
-	full_print_hex(key, len);
+	//full_print_hex(key, len);
 	uint32_t h = seed;
 	if (len > 3) {
 		const uint32_t* key_x4 = (const uint32_t*) key;
