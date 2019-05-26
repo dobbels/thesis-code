@@ -190,35 +190,6 @@ struct nonce_sr {
    uint8_t content[8];
 };
 
-/*
- * Change policy related to subject with general DENY.
- * If no associated subject exists with subject_id, return failure = 0
- */
-uint8_t
-blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id)
-{
-	uint8_t result = 0;
-
-	int subject_index = 0;
-	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
-		if(assocs->subject_association_set[subject_index]->id == subject_id) {
-			uint8_t policy_id = get_char_from(0, assocs->subject_association_set[subject_index]->policy);
-
-			//Set enough memory to zero for the new policy (TODO actually redundant?)
-			memset(assocs->subject_association_set[subject_index]->policy, 0, 2);
-
-			// Same policy id
-			assocs->subject_association_set[subject_index]->policy[0] = policy_id;
-			// Deny everything, no extra rules.
-			assocs->subject_association_set[subject_index]->policy[1] = 0;
-			assocs->subject_association_set[subject_index]->policy_size = 2;
-
-			result = 1;
-		}
-	}
-	return result;
-}
-
 // For demo purposes
 unsigned char battery_level = 249;
 unsigned char nb_of_access_requests_made = 0;
@@ -361,17 +332,15 @@ send_access_ack(struct simple_udp_connection *c,
 static uint8_t
 is_already_associated(uint8_t id)
 {
-	uint8_t result = 0;
-
 	int subject_index = 0;
 
 	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
 		if(associated_subjects->subject_association_set[subject_index]->id == id) {
-			result = 1;
+			return 1;
 		}
 	}
 
-	return result;
+	return 0;
 }
 
 //static void
@@ -643,6 +612,7 @@ handle_subject_access_request(const uint8_t *data,
         uint16_t datalen,
         uint8_t sub_id)
 {
+
 	//printf("Handling subject %d access request\n", sub_id);
 	uint8_t * session_key = get_session_key(sub_id);
 	if (session_key == NULL) {
@@ -696,6 +666,7 @@ handle_subject_access_request(const uint8_t *data,
 			}
 			if (exists) {
 
+//				print_policy(current_sub->policy, 0);
 //				eval_timestamp = RTIMER_NOW();
 
 				// Assumption for demo purposes: 1 single rule inside the policy
@@ -1071,6 +1042,7 @@ process_cm_ind(uint8_t subject_id,
 //				eval_timestamp = RTIMER_NOW();
 			} else {
 				printf("Error: Not a correct key, therefore subject information is not fresh \n");
+				set_fresh_information(subject_id, 0);
 				need_to_request_next_key = 1;
 			}
 		}
@@ -1199,34 +1171,84 @@ set_up_hidra_association_with_server(struct simple_udp_connection *c,
 	return 1;
 }
 
+/*
+ * Change policy related to subject with general DENY.
+ * If no associated subject exists with subject_id, return failure = 0
+ */
+uint8_t
+blacklist_subject(struct associated_subjects *assocs, uint8_t subject_id)
+{
+	uint8_t result = 0;
+
+	int subject_index = 0;
+	for (; subject_index < nb_of_associated_subjects ; subject_index++) {
+		if(assocs->subject_association_set[subject_index]->id == subject_id) {
+			uint8_t policy_id = get_char_from(0, assocs->subject_association_set[subject_index]->policy);
+
+			//Set enough memory to zero for the new policy (TODO actually redundant?)
+			memset(assocs->subject_association_set[subject_index]->policy, 0, 2);
+
+			// Same policy id
+			assocs->subject_association_set[subject_index]->policy[0] = policy_id;
+			// Deny everything, no extra rules.
+			assocs->subject_association_set[subject_index]->policy[1] = 0;
+			assocs->subject_association_set[subject_index]->policy_size = 2;
+
+			result = 1;
+		}
+	}
+	return result;
+}
+
 static void
 handle_policy_update(struct simple_udp_connection *c,
 		const uip_ipaddr_t *sender_addr,
 		const uint8_t *data,
-        uint16_t datalen,
-        int bit_index)
+        uint16_t datalen)
 {
-	uint8_t subject_id = get_char_from(bit_index, data);
-	bit_index += 8;
+	const char * filename = "properties";
 
-//	printf("Updating policy : \n");
-	//Check if this subject is indeed found
-	if (is_already_associated(subject_id)) {
-		if (get_3_bits_from(bit_index, data) == 0) {
-			if (blacklist_subject(associated_subjects, subject_id)) {
-				//Answer with success message
-				send_ack(c, sender_addr);
-			} else {
-				//Answer with failure message
-				send_nack(c, sender_addr);
+	memcpy(messaging_buffer, data, datalen);
+
+	if(same_mac(messaging_buffer + datalen - 4, messaging_buffer + 2, datalen - 6, resource_key)) {
+
+		uint8_t subject_id = data[3];
+		struct associated_subject * current_subject;
+
+		//Get current_subject
+		int sub_index = 0;
+		for (; sub_index < nb_of_associated_subjects ; sub_index++) {
+			if (associated_subjects->subject_association_set[sub_index]->id == subject_id) {
+				current_subject = associated_subjects->subject_association_set[sub_index];
 			}
+		}
+
+		// assign policy size based on knowledge about the rest of the message
+		current_subject->policy_size = datalen - 24;
+
+		// decrypt policy before storage
+		xcrypt_ctr(resource_key, messaging_buffer + 20, current_subject->policy_size);
+
+		//Check key chain value with stored value
+		static uint8_t new_key[16];
+		memcpy(new_key, messaging_buffer + 4, 16);
+
+		static uint8_t next_key[16];
+		md5(next_key, new_key, 16);
+
+		if (memcmp(current_k_i_r_cm, next_key, 16) == 0) {
+			//Store new value
+			memcpy(current_k_i_r_cm, new_key, 16);
+
+			set_fresh_information(subject_id, 1);
+			//Store this policy
+			memcpy(current_subject->policy, messaging_buffer + 20, current_subject->policy_size);
 		} else {
-			//Answer with failure message
-			send_nack(c, sender_addr);
+			printf("Error: Not a correct key, therefore subject information is not fresh \n");
+			set_fresh_information(subject_id, 0);
 		}
 	} else {
-		//Answer with failure message
-		send_nack(c, sender_addr);
+		printf("Incorrect MAC code\n");
 	}
 }
 
@@ -1241,10 +1263,14 @@ receiver_server(struct simple_udp_connection *c,
 {
   //The first byte indicates the purpose of this message from the trusted server
   if (data[0]) {
-	  if (is_already_associated(data[2])) {
-		  handle_policy_update(c, sender_addr, data+1, datalen-1, 0);
+	  if (data[2] == 2) {
+		  if (is_already_associated(data[4])) {
+			  handle_policy_update(c, sender_addr, data+1, datalen-1);
+		  } else {
+			  printf("Error: Trying to update a policy of a non-associated subject. \n");
+		  }
 	  } else {
-		  printf("Trying to update a policy of a non-associated subject. \n");
+		  printf("Error: Wrong resource number in policy-update. \n");
 	  }
   } else {
 	  set_up_hidra_association_with_server(c, sender_addr, data+1, datalen-1);
